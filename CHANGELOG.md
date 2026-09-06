@@ -5,7 +5,7 @@ All notable changes to **Telegraph REST API Client** are documented here.
 This project follows [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.1.0] — 2026-09-05
+## [0.1.0] — 2026-09-06
 
 First public release.
 
@@ -25,7 +25,7 @@ First public release.
 
 ### Responses
 
-- Status, timing, size, and full redirect chain
+- Status, timing, and response size
 - Syntax highlighting for JSON, XML, HTML, CSS, and JavaScript
 - Collapse and expand regions in JSON, XML, HTML, and GraphQL
 - Find in response, with match case, whole word, and regular expressions
@@ -82,13 +82,14 @@ First public release.
 ### Activity
 
 - Automatic history of ad-hoc requests with status and timing
-- Re-running a request updates its existing entry instead of adding a duplicate
-- Open any entry as a new request
+- Re-running a request updates its existing entry instead of adding a duplicate,
+  with a run count shown alongside it
+- Save any entry into a collection
 
 ### Under the hood
 
 - Zero runtime dependencies; the HTTP engine is built on Node's own `http`/`https`
-- About 180 KB packaged
+- Around 75 KB packaged
 - No telemetry and no network calls beyond the requests you send
 
 [0.1.0]: https://github.com/riturajshakti/telegraph-rest-api-client/releases/tag/v0.1.0

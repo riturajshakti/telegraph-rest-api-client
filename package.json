@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/riturajshakti/telegraph-rest-api-client"
+    "url": "https://github.com/riturajshakti/telegraph-rest-api-client.git"
   },
   "engines": {
     "vscode": "^1.78.0"

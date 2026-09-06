@@ -21,3 +21,16 @@ bun.lock
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+# Release and OS clutter
+release-steps.md
+**/.DS_Store
+Thumbs.db
+*.vsix
+.github/**
+.editorconfig
+.eslintrc*
+.prettierrc*
+**/*.map
+**/*.tsbuildinfo
+.env
