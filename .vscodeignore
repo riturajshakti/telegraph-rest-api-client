@@ -1,0 +1,23 @@
+.vscode/**
+src/**
+node_modules/**
+build.mjs
+tsconfig.json
+.gitignore
+
+# Screenshots are served from GitHub, not bundled — keeps the .vsix small
+images/**
+
+# Development notes, not needed by users
+plan.md
+prompt.md
+setup.md
+
+# Test server — development only, never shipped
+server/**
+
+# Lockfiles are not needed at runtime
+bun.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

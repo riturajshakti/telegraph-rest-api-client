@@ -1,0 +1,186 @@
+{
+  "name": "telegraph-rest-api-client",
+  "displayName": "Telegraph REST API Client",
+  "description": "Lightweight offline REST API client for VS Code. Test HTTP, REST and GraphQL APIs with collections, environments and .env support. A free, open-source Postman and Thunder Client alternative \u2014 no account, no cloud, no limits.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "riturajshakti",
+  "author": {
+    "name": "Rituraj Shakti"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/riturajshakti/telegraph-rest-api-client"
+  },
+  "engines": {
+    "vscode": "^1.78.0"
+  },
+  "categories": [
+    "Testing",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "rest client",
+    "api client",
+    "http client",
+    "postman",
+    "thunder client",
+    "rest api",
+    "api testing",
+    "http request",
+    "graphql",
+    "openapi",
+    "swagger",
+    "curl",
+    "insomnia",
+    "postman alternative",
+    "thunder client alternative",
+    "api explorer",
+    "endpoint testing",
+    "web services",
+    "http",
+    "rest",
+    "api",
+    "json",
+    "offline",
+    "environment variables",
+    "dotenv",
+    "collections",
+    "api development",
+    "testing",
+    "client"
+  ],
+  "icon": "media/icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "telegraph",
+          "title": "Telegraph",
+          "icon": "media/telegraph.svg"
+        }
+      ]
+    },
+    "views": {
+      "telegraph": [
+        {
+          "type": "webview",
+          "id": "telegraph.sidebar",
+          "name": "Telegraph",
+          "contextualTitle": "Telegraph REST API Client"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "telegraph.newRequest",
+        "title": "New Request",
+        "category": "Telegraph",
+        "icon": "$(add)"
+      },
+      {
+        "command": "telegraph.newCollection",
+        "title": "New Collection",
+        "category": "Telegraph",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "telegraph.refresh",
+        "title": "Reload Data",
+        "category": "Telegraph",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "telegraph.newRequest",
+          "group": "navigation@1",
+          "when": "view == telegraph.sidebar"
+        },
+        {
+          "command": "telegraph.newCollection",
+          "group": "navigation@2",
+          "when": "view == telegraph.sidebar"
+        },
+        {
+          "command": "telegraph.refresh",
+          "group": "navigation@3",
+          "when": "view == telegraph.sidebar"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Telegraph REST API Client",
+      "properties": {
+        "telegraph.requestTimeout": {
+          "type": "number",
+          "default": 0,
+          "scope": "resource",
+          "markdownDescription": "Request timeout in milliseconds. `0` means no timeout."
+        },
+        "telegraph.followRedirects": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Follow HTTP redirects when running requests, up to 1000 hops. Also toggled by the **Follow Redirects** switch in the request section."
+        },
+        "telegraph.responseLimit": {
+          "type": "number",
+          "default": 2,
+          "scope": "resource",
+          "markdownDescription": "Maximum response size to render, in MB."
+        },
+        "telegraph.indentSize": {
+          "type": "number",
+          "enum": [
+            2,
+            4
+          ],
+          "default": 2,
+          "scope": "resource",
+          "markdownDescription": "Indentation used when formatting JSON responses."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "telegraph.newRequest",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "package": "node build.mjs --production",
+    "typecheck": "tsc --noEmit",
+    "vsix": "npm run package && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.78.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  },
+  "homepage": "https://github.com/riturajshakti/telegraph-rest-api-client#readme",
+  "bugs": {
+    "url": "https://github.com/riturajshakti/telegraph-rest-api-client/issues"
+  },
+  "qna": "https://github.com/riturajshakti/telegraph-rest-api-client/issues",
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
+  },
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "pricing": "Free"
+}
