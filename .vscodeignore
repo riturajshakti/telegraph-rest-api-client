@@ -22,6 +22,9 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
+# Icon source — only the rendered PNG is used
+media/icon.svg
+
 # Release and OS clutter
 release-steps.md
 **/.DS_Store

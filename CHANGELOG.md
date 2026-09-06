@@ -5,6 +5,12 @@ All notable changes to **Telegraph REST API Client** are documented here.
 This project follows [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.1.1] — 2026-09-06
+
+### Changed
+
+- The extension icon now uses the app's purple accent colour instead of orange
+
 ## [0.1.0] — 2026-09-06
 
 First public release.
@@ -92,4 +98,5 @@ First public release.
 - Around 75 KB packaged
 - No telemetry and no network calls beyond the requests you send
 
+[0.1.1]: https://github.com/riturajshakti/telegraph-rest-api-client/releases/tag/v0.1.1
 [0.1.0]: https://github.com/riturajshakti/telegraph-rest-api-client/releases/tag/v0.1.0

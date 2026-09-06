@@ -1,8 +1,8 @@
 {
   "name": "telegraph-rest-api-client",
   "displayName": "Telegraph REST API Client",
-  "description": "Lightweight offline REST API client for VS Code. Test HTTP, REST and GraphQL APIs with collections, environments and .env support. A free, open-source Postman and Thunder Client alternative \u2014 no account, no cloud, no limits.",
-  "version": "0.1.0",
+  "description": "Lightweight offline REST API client for VS Code. Test HTTP, REST and GraphQL APIs with collections, environments and .env support. A free, open-source Postman and Thunder Client alternative — no account, no cloud, no limits.",
+  "version": "0.1.1",
   "license": "MIT",
   "publisher": "riturajshakti",
   "author": {
