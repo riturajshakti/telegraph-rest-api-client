@@ -4,7 +4,23 @@
 
 A free and open-source alternative to Postman and Thunder Client, built as a lightweight VS Code extension.
 
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/riturajshakti.telegraph-rest-api-client.svg?color=7c5cff)](https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/riturajshakti.telegraph-rest-api-client.svg?color=7c5cff)](https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client)
+[![Open VSX](https://img.shields.io/open-vsx/v/riturajshakti/telegraph-rest-api-client?label=Open%20VSX&color=7c5cff)](https://open-vsx.org/extension/riturajshakti/telegraph-rest-api-client)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.txt)
+
 ![Telegraph REST API Client](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/api-request.png)
+
+## Install
+
+**[Install from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client)** — or search `Telegraph` in the Extensions panel.
+
+Using Cursor, Antigravity, Windsurf, VSCodium, or Gitpod? Install from
+**[Open VSX](https://open-vsx.org/extension/riturajshakti/telegraph-rest-api-client)**.
+
+```sh
+code --install-extension riturajshakti.telegraph-rest-api-client
+```
 
 ---
 
@@ -12,7 +28,7 @@ A free and open-source alternative to Postman and Thunder Client, built as a lig
 
 - **Genuinely free** — no paid plans, no request limits, no locked features
 - **Fully offline** — no telemetry, no cloud sync, no account required
-- **Tiny** — a ~75 KB download with **zero runtime dependencies**
+- **Tiny** — a ~79 KB download with **zero runtime dependencies**
 - **Native feel** — follows your VS Code theme, light or dark
 - **Your data is yours** — collections are plain, readable JSON you can commit to git
 
@@ -140,6 +156,26 @@ Client importer is planned.
 ### Activity
 
 Ad-hoc requests are tracked automatically with status and timing. Re-running a request updates its existing entry rather than filling the list with duplicates.
+
+---
+
+## How Telegraph compares
+
+|  | Telegraph | Thunder Client | Postman |
+|---|---|---|---|
+| Free requests per collection | Unlimited | 15 (free tier) | Unlimited |
+| Works offline | Yes | Partly | No — account required |
+| Account / sign-in | Never | Required for paid tier | Required |
+| Telemetry | None | Yes | Yes |
+| Runs inside VS Code | Yes | Yes | Separate app |
+| Collections in git | Plain JSON | Proprietary | Cloud-synced |
+| Open source | MIT | No | No |
+| Download size | ~79 KB | ~10 MB | ~200 MB app |
+
+Telegraph deliberately does **not** try to match Postman feature for feature.
+There is no test scripting, no request chaining, and no team sync — if you need
+those, Postman is the better tool. What Telegraph does is send HTTP requests
+from your editor, quickly, without asking anything of you.
 
 ---
 
