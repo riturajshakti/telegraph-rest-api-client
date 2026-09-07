@@ -1,17 +1,26 @@
 # Release steps
 
-How to publish **Telegraph REST API Client** to the VS Code Marketplace.
+How to publish **Telegraph REST API Client** to the two extension registries.
 
-- Publisher ID: `riturajshakti`
+- Publisher / namespace: `riturajshakti`
 - Extension ID: `riturajshakti.telegraph-rest-api-client`
 - Repository: <https://github.com/riturajshakti/telegraph-rest-api-client>
 
-Two parts: [first-time setup](#part-1--first-time-setup) (once) and
-[publishing a release](#part-2--publishing-a-release) (every time).
+| Registry | Reaches | Tool |
+|---|---|---|
+| **VS Code Marketplace** | VS Code | `vsce` |
+| **Open VSX** | Cursor, Windsurf, VSCodium, Gitpod, Theia | `ovsx` |
+
+Microsoft's Marketplace licence only permits its own products, so the forks pull
+from Open VSX instead. Publishing to both is the same `.vsix` uploaded twice.
+
+- [Part 1 — Marketplace setup](#part-1-vs-code-marketplace-first-time-setup) (once)
+- [Part 2 — Open VSX setup](#part-2-open-vsx-first-time-setup) (once)
+- [Part 3 — Publishing a release](#part-3-publishing-a-release) (every time)
 
 ---
 
-## Part 1 — First-time setup
+## Part 1 — VS Code Marketplace first-time setup
 
 Only needed once per machine.
 
@@ -71,7 +80,60 @@ needed again until the token expires.
 
 ---
 
-## Part 2 — Publishing a release
+## Part 2 — Open VSX first-time setup
+
+Open VSX is run by the Eclipse Foundation, so it authenticates through an
+Eclipse account rather than Azure. Only needed once.
+
+### 1. Create an Eclipse account
+
+1. Sign up at <https://accounts.eclipse.org/user/register>
+2. Verify the email it sends
+
+### 2. Sign the Publisher Agreement
+
+This is the step people miss, and publishing fails without it.
+
+1. Go to <https://accounts.eclipse.org/user/edit/eclipse-account>
+2. Fill in **GitHub username** and save — Open VSX matches accounts by it
+3. Go to <https://open-vsx.org>, click **Log In**, and authorise with GitHub
+4. Open your profile menu → **Settings** → and sign the
+   **Eclipse Foundation Open VSX Publisher Agreement**
+
+### 3. Create an access token
+
+1. At <https://open-vsx.org>, profile menu → **Settings** → **Access Tokens**
+2. **Generate New Token**, give it a description such as `ovsx-telegraph`
+3. Copy it immediately — like the Azure token, it is shown only once
+
+Store it alongside the Azure PAT. These are two different credentials for two
+different registries.
+
+### 4. Create the namespace
+
+The namespace must match the `publisher` field in `package.json`.
+
+```sh
+export OVSX_PAT=<your-open-vsx-token>
+npx ovsx create-namespace riturajshakti -p $OVSX_PAT
+```
+
+Do this once. A namespace you create is *unverified*, which is fine — it only
+means the listing does not show an ownership badge. To claim verified ownership
+later, open an issue on
+<https://github.com/EclipseFdn/open-vsx.org> requesting namespace verification.
+
+### 5. Check it worked
+
+```sh
+npx ovsx verify-pat riturajshakti -p $OVSX_PAT
+```
+
+Prints a success message when the token and namespace line up.
+
+---
+
+## Part 3 — Publishing a release
 
 Run these from the project root for every release, first or otherwise.
 
@@ -169,25 +231,104 @@ git tag v0.1.1
 git push origin main --tags
 ```
 
-### 7. Publish
+### 7. Publish to both registries
+
+Build the `.vsix` once and upload the same file to both, so the two listings
+are byte-identical.
+
+```sh
+npx @vscode/vsce package --no-dependencies
+```
+
+**VS Code Marketplace:**
 
 ```sh
 npx @vscode/vsce publish --no-dependencies
 ```
 
-The listing appears at
-<https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client>
-within a few minutes. A first publish can take up to 15 minutes to become
-searchable.
+**Open VSX:**
 
-### 8. Verify
+```sh
+export OVSX_PAT=<your-open-vsx-token>
+npx ovsx publish telegraph-rest-api-client-0.1.1.vsix -p $OVSX_PAT
+```
 
-1. Open the Marketplace page and check that all 15 screenshots load
-2. In VS Code: **Extensions** → search `Telegraph REST API Client` → install
-3. Send one request to confirm the packaged build works
+Passing the built `.vsix` explicitly means `ovsx` uploads exactly what you
+inspected in step 5 rather than repacking.
 
-Installing your own published build catches problems no local test can — a
-missing `dist/` file, or an asset excluded by mistake.
+Listings:
+
+- <https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client>
+- <https://open-vsx.org/extension/riturajshakti/telegraph-rest-api-client>
+
+The Marketplace takes a few minutes to appear, and up to 15 on a first publish
+before it is searchable. Open VSX is usually live within a minute.
+
+If one registry succeeds and the other fails, that is fine — they are
+independent. Fix the failure and re-run just that command; no version bump is
+needed because the version was never accepted there.
+
+### 8. Verify both registries
+
+A listing page can be cached or still propagating, so check the APIs — they
+report what each registry is actually serving.
+
+**Both versions at a glance:**
+
+```sh
+VER=$(node -p "require('./package.json').version")
+
+curl -s -X POST "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json;api-version=7.1-preview.1" \
+  -d '{"filters":[{"criteria":[{"filterType":7,"value":"riturajshakti.telegraph-rest-api-client"}]}],"flags":914}' \
+  | python3 -c "import json,sys; e=json.load(sys.stdin)['results'][0]['extensions'][0]; \
+    s={x['statisticName']:x['value'] for x in e.get('statistics',[])}; \
+    print('marketplace:', e['versions'][0]['version'], '|', int(s.get('install',0)), 'installs')"
+
+curl -s "https://open-vsx.org/api/riturajshakti/telegraph-rest-api-client" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); \
+    print('open vsx:   ', d['version'], '|', d.get('downloadCount',0), 'downloads')"
+```
+
+Both should print the version you just published. If one lags, give it a minute
+— Open VSX is usually live within a minute, the Marketplace can take 15 on a
+first publish.
+
+**Confirm the packages download:**
+
+```sh
+curl -sL -o /dev/null -w "marketplace vsix: %{http_code}\n" \
+  "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/riturajshakti/vsextensions/telegraph-rest-api-client/$VER/vspackage"
+curl -sL -o /dev/null -w "open vsx vsix:    %{http_code}\n" \
+  "https://open-vsx.org/api/riturajshakti/telegraph-rest-api-client/$VER/file/riturajshakti.telegraph-rest-api-client-$VER.vsix"
+```
+
+Two `200`s mean both are serving the package. The `-L` matters — both registries
+redirect to a CDN, so without it you get a `302` that looks like a failure.
+
+**Confirm the right bytes shipped** — catches a stale `dist/` or a wrongly
+excluded asset, which no local test can:
+
+```sh
+curl -sL "https://open-vsx.org/api/riturajshakti/telegraph-rest-api-client/$VER/file/riturajshakti.telegraph-rest-api-client-$VER.vsix" -o /tmp/check.vsix
+unzip -l /tmp/check.vsix | tail -20
+```
+
+Expect the same 14 files from step 5, plus the two vsce generates.
+
+**Then install it yourself:**
+
+1. Open both listings and check that all 15 screenshots load
+2. VS Code: **Extensions** → search `Telegraph REST API Client` → install
+3. A fork (Cursor, Windsurf, VSCodium) pulls from Open VSX — install there too
+   if you have one, since that path is never exercised by the Marketplace
+4. Send one request to confirm the packaged build works
+
+Listings:
+
+- <https://marketplace.visualstudio.com/items?itemName=riturajshakti.telegraph-rest-api-client>
+- <https://open-vsx.org/extension/riturajshakti/telegraph-rest-api-client>
 
 ### 9. Create a GitHub release (optional)
 
@@ -205,16 +346,19 @@ from issues.
 
 ## Quick reference
 
-**First publish** — no version bump, `package.json` is already at `0.1.0`:
+**First publish to a registry** — no version bump, the current version has
+never been accepted there:
 
 ```sh
 npx tsc --noEmit && node build.mjs
 cd server && npm test && cd ..
 npx @vscode/vsce ls --no-dependencies
-git add -A && git commit -m "Release 0.1.0" && git tag v0.1.0
-git push origin main --tags
-npx @vscode/vsce publish --no-dependencies
+npx @vscode/vsce package --no-dependencies
+npx ovsx publish telegraph-rest-api-client-0.1.1.vsix -p $OVSX_PAT
 ```
+
+The Marketplace already has `0.1.1`, so Open VSX can start from the same
+version — the two registries track versions independently.
 
 **Every release after that** — bump first:
 
@@ -224,9 +368,12 @@ cd server && npm test && cd ..
 npm version patch --no-git-tag-version
 # edit CHANGELOG.md
 npx @vscode/vsce ls --no-dependencies
-git add -A && git commit -m "Release 0.1.1" && git tag v0.1.1
+git add -A && git commit -m "Release 0.1.2" && git tag v0.1.2
 git push origin main --tags
+
+npx @vscode/vsce package --no-dependencies
 npx @vscode/vsce publish --no-dependencies
+npx ovsx publish telegraph-rest-api-client-0.1.2.vsix -p $OVSX_PAT
 ```
 
 ---
@@ -252,6 +399,23 @@ account than the one that created the token. Create it at
 <https://marketplace.visualstudio.com/manage> with the ID exactly
 `riturajshakti`, signed in as the same account, then run `vsce login` again.
 The existing token is fine — this is not a scope problem.
+
+### Open VSX
+
+**`Unknown namespace: riturajshakti`**
+The namespace was never created. Run
+`npx ovsx create-namespace riturajshakti -p $OVSX_PAT` once, then publish again.
+
+**`Insufficient access rights for publisher: riturajshakti`**
+The token belongs to a different account than the namespace owner, or the
+Publisher Agreement is unsigned. Sign it at <https://open-vsx.org> under
+profile → Settings, then retry — the token does not need recreating.
+
+**`ERROR: Extension riturajshakti.telegraph-rest-api-client 0.1.1 is already published`**
+That version is already on Open VSX. Bump and republish, or add
+`--skip-duplicate` when you want a re-run to pass silently.
+
+### VS Code Marketplace
 
 **`ERROR Version 0.1.0 already exists`**
 That version was published before. Bump and try again — a published version can

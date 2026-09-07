@@ -131,7 +131,11 @@ A collection can use no environment, embed its own, or link shared ones:
 
 ![Export format](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/export-collection.png)
 
-Migrating from Postman or Thunder Client? Export from there and import the file directly — folder structure, headers, auth, and bodies are all preserved.
+Migrating from Postman? Export your collection and import the file directly —
+folder structure, headers, auth, and bodies are all preserved.
+
+Coming from Thunder Client, export to Postman format first; a native Thunder
+Client importer is planned.
 
 ### Activity
 
