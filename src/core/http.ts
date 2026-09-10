@@ -17,12 +17,57 @@ import type {
 /** Files at or under this size have their bytes inlined in the Raw view. */
 export const INLINE_BYTES_LIMIT = 25 * 1024;
 
+/** How much of an uploaded file the Raw tab shows before truncating. */
+export const UPLOAD_PREVIEW_BYTES = 64 * 1024;
+
+/**
+ * Renders the head of an uploaded file for the Raw tab. Large files show a
+ * bounded hex dump with a note rather than nothing at all.
+ */
+function filePreview(contents: Buffer): {
+  preview: string;
+  previewTruncated: boolean;
+  previewBase64: string;
+  previewNote: string;
+} {
+  const head = contents.subarray(0, UPLOAD_PREVIEW_BYTES);
+  const dump = renderBytes(head);
+  const base64 = head.toString('base64');
+
+  if (contents.byteLength <= UPLOAD_PREVIEW_BYTES) {
+    return {
+      preview: dump,
+      previewTruncated: false,
+      previewBase64: base64,
+      previewNote: '',
+    };
+  }
+
+  const note =
+    `\n\n<showing the first ${UPLOAD_PREVIEW_BYTES.toLocaleString('en-US')} of ` +
+    `${contents.byteLength.toLocaleString('en-US')} bytes — ` +
+    `use "Load full bytes" above to display them all>`;
+
+  return {
+    preview: dump + note,
+    previewTruncated: true,
+    previewBase64: base64,
+    previewNote: note,
+  };
+}
+
 export interface SentFileInfo {
   name: string;
   fileName: string;
   bytes: number;
-  /** Present when the file is small enough to inline. */
+  /** A hex dump of the file, bounded to the first 64 KB. */
   preview?: string;
+  /** True when `preview` shows only the head of a larger file. */
+  previewTruncated?: boolean;
+  /** The same 64 KB head, base64 encoded, for switching hex formats. */
+  previewBase64?: string;
+  /** Truncation note appended after the dump, when the file was longer. */
+  previewNote?: string;
 }
 
 export interface SentBodyInfo {
@@ -38,6 +83,16 @@ export interface SendOptions {
   signal?: { aborted: boolean; onAbort?: () => void };
   onUploadProgress?: (sent: number, total: number) => void;
   onBodyPrepared?: (info: SentBodyInfo) => void;
+  /**
+   * How to handle a binary response body.
+   *  - 'probe'    stop at the headers and resolve with no body, so the view can
+   *               offer a choice without transferring the payload
+   *  - 'download' stream straight to `downloadPath`, never buffering
+   *  - 'text'     buffer and render a bounded preview
+   */
+  binaryMode?: 'probe' | 'download' | 'text';
+  downloadPath?: string;
+  onDownloadProgress?: (received: number, total: number) => void;
   onStreamStart?: (info: {
     status: number;
     statusText: string;
@@ -56,6 +111,51 @@ const STREAMING_TYPES = [
 export function isStreamingContentType(contentType: string): boolean {
   const value = contentType.toLowerCase();
   return STREAMING_TYPES.some((type) => value.includes(type));
+}
+
+/** Content types that are never meaningful as text in the response view. */
+const BINARY_TYPE_PREFIXES = ['image/', 'video/', 'audio/', 'font/'];
+
+const BINARY_TYPES = [
+  'application/octet-stream',
+  'application/pdf',
+  'application/zip',
+  'application/gzip',
+  'application/x-gzip',
+  'application/x-tar',
+  'application/x-7z-compressed',
+  'application/x-rar-compressed',
+  'application/x-bzip',
+  'application/x-bzip2',
+  'application/wasm',
+  'application/x-msdownload',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument',
+  'application/vnd.oasis.opendocument',
+  'application/vnd.android.package-archive',
+  'application/x-shockwave-flash',
+  'application/epub+zip',
+  'application/x-sqlite3',
+  'application/protobuf',
+  'application/x-protobuf',
+];
+
+/**
+ * True when a response should be offered as a download rather than rendered.
+ * Checked against the declared content type, before any bytes are decoded.
+ */
+export function isBinaryContentType(contentType: string): boolean {
+  const value = contentType.toLowerCase().split(';')[0].trim();
+  if (!value) {
+    return false;
+  }
+  if (BINARY_TYPE_PREFIXES.some((prefix) => value.startsWith(prefix))) {
+    // SVG is XML, so it stays readable.
+    return value !== 'image/svg+xml';
+  }
+  return BINARY_TYPES.some((type) => value.startsWith(type));
 }
 
 const MAX_REDIRECTS = 1000;
@@ -211,9 +311,7 @@ function prepareBody(request: ApiRequest): PreparedBody {
             name: field.name,
             fileName,
             bytes: contents.byteLength,
-            ...(contents.byteLength <= INLINE_BYTES_LIMIT
-              ? { preview: renderBytes(contents) }
-              : {}),
+            ...filePreview(contents),
           });
           continue;
         }
@@ -251,9 +349,7 @@ function prepareBody(request: ApiRequest): PreparedBody {
                 name: '',
                 fileName,
                 bytes: contents.byteLength,
-                ...(contents.byteLength <= INLINE_BYTES_LIMIT
-                  ? { preview: renderBytes(contents) }
-                  : {}),
+                ...filePreview(contents),
               },
             ],
           },
@@ -377,20 +473,36 @@ export function renderBytes(buffer: Buffer): string {
     return text;
   }
 
+  return hexDump(buffer, true);
+}
+
+/**
+ * Formats bytes as hex rows of 16. With `withOffsets` the row carries a
+ * leading offset column and a trailing ASCII gutter; without it, bare hex.
+ */
+export function hexDump(buffer: Buffer, withOffsets: boolean): string {
   const lines: string[] = [];
   for (let offset = 0; offset < buffer.length; offset += 16) {
     const slice = buffer.subarray(offset, offset + 16);
     const hex = [...slice]
       .map((b) => b.toString(16).padStart(2, '0'))
-      .join(' ')
-      .padEnd(47, ' ');
+      .join(' ');
+
+    if (!withOffsets) {
+      lines.push(hex);
+      continue;
+    }
+
     const ascii = [...slice]
       .map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.'))
       .join('');
-    lines.push(`${offset.toString(16).padStart(8, '0')}  ${hex}  |${ascii}|`);
+    lines.push(
+      `${offset.toString(16).padStart(8, '0')}  ${hex.padEnd(47, ' ')}  |${ascii}|`
+    );
   }
   return lines.join('\n');
 }
+
 
 function flattenHeaders(raw: http.IncomingHttpHeaders): KeyValue[] {
   const out: KeyValue[] = [];
@@ -419,6 +531,12 @@ interface RawResult {
   totalBytes: number;
   truncated: boolean;
   firstByteAt: number;
+  /** Set when the body was deliberately not read, only the headers. */
+  probed?: boolean;
+  /** How many bytes of the body were read for the preview. */
+  headBytes?: number;
+  /** Set when the body was streamed to this path instead of buffered. */
+  savedTo?: string;
 }
 
 function performRequest(
@@ -456,7 +574,9 @@ function performRequest(
           !!options.onStreamChunk && isStreamingContentType(responseType);
         const decoder = streaming ? new StringDecoder('utf8') : null;
 
-        if (streaming) {
+        // Announce as soon as the headers land so the view can offer a
+        // download for binary payloads instead of waiting for every byte.
+        if (streaming || isBinaryContentType(responseType)) {
           options.onStreamStart?.({
             status: res.statusCode ?? 0,
             statusText: res.statusMessage ?? '',
@@ -465,18 +585,136 @@ function performRequest(
           });
         }
 
+        const isBinary = isBinaryContentType(responseType);
+        const mode = options.binaryMode ?? 'text';
+
+        // Read just enough of a binary body to preview it, then stop. The
+        // caller decides what to do before the rest crosses the wire.
+        if (isBinary && mode === 'probe') {
+          const HEAD_BYTES = 64 * 1024;
+          const declared = Number(res.headers['content-length'] ?? 0);
+          const head: Buffer[] = [];
+          let headBytes = 0;
+          let settled = false;
+
+          const finish = (): void => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            res.destroy();
+            resolve({
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage ?? '',
+              headers: flattenHeaders(res.headers),
+              rawHeaders: res.headers,
+              chunks: head,
+              totalBytes: declared || headBytes,
+              truncated: false,
+              firstByteAt,
+              probed: true,
+              headBytes,
+            });
+          };
+
+          res.on('data', (chunk: Buffer) => {
+            if (settled) {
+              return;
+            }
+            const room = HEAD_BYTES - headBytes;
+            const slice = chunk.byteLength <= room ? chunk : chunk.subarray(0, room);
+            head.push(slice);
+            headBytes += slice.byteLength;
+            if (headBytes >= HEAD_BYTES) {
+              finish();
+            }
+          });
+
+          // A body smaller than the head limit ends before the cap is reached.
+          res.on('end', finish);
+          res.on('close', finish);
+          return;
+        }
+
+        // Write to disk as bytes arrive, so file size is bounded by the disk
+        // rather than by memory.
+        if (isBinary && mode === 'download' && options.downloadPath) {
+          const declared = Number(res.headers['content-length'] ?? 0);
+          const target = options.downloadPath;
+          const out = fs.createWriteStream(target);
+          let written = 0;
+          let settled = false;
+
+          // A cancel destroys the response mid-pipe, so 'finish' never fires.
+          // Close the file, remove the partial download, and reject once.
+          const fail = (err: Error): void => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            // Remove the partial file only once the stream has released its
+            // handle: destroy() is asynchronous, so unlinking immediately
+            // races with the final flush and leaves the file behind.
+            out.once('close', () => {
+              try {
+                fs.unlinkSync(target);
+              } catch {
+                // Already gone, or never created.
+              }
+              reject(err);
+            });
+            out.destroy();
+          };
+
+          res.on('data', (chunk: Buffer) => {
+            written += chunk.byteLength;
+            options.onDownloadProgress?.(written, declared);
+          });
+
+          res.on('error', fail);
+          res.on('aborted', () => fail(new Error('Request cancelled')));
+          out.on('error', fail);
+
+          out.on('finish', () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            resolve({
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage ?? '',
+              headers: flattenHeaders(res.headers),
+              rawHeaders: res.headers,
+              chunks: [],
+              totalBytes: written,
+              truncated: false,
+              firstByteAt,
+              savedTo: target,
+            });
+          });
+
+          res.pipe(out);
+          return;
+        }
+
+        // A limit of 0 means render everything, however large. Binary payloads
+        // ignore the limit outright: they are destined for a download, and a
+        // truncated file is a corrupt file.
+        const limit =
+          options.responseLimitBytes > 0 && !isBinaryContentType(responseType)
+            ? options.responseLimitBytes
+            : Number.POSITIVE_INFINITY;
+
         res.on('data', (chunk: Buffer) => {
           totalBytes += chunk.byteLength;
           let kept: Buffer | null = null;
 
-          if (totalBytes <= options.responseLimitBytes) {
+          if (totalBytes <= limit) {
             chunks.push(chunk);
             kept = chunk;
           } else if (!truncated) {
             truncated = true;
-            const room =
-              options.responseLimitBytes -
-              (totalBytes - chunk.byteLength);
+            const room = limit - (totalBytes - chunk.byteLength);
             if (room > 0) {
               const slice = chunk.subarray(0, room);
               chunks.push(slice);
@@ -643,11 +881,48 @@ export async function sendRequest(
       result.headers.find((h) => h.name.toLowerCase() === 'content-type')
         ?.value ?? '';
 
+    const binary = isBinaryContentType(contentType);
+
+    // A hex dump runs to roughly five characters per byte, so a large binary
+    // payload would cross the webview boundary many times bigger than the file
+    // itself. Send a bounded preview; the host keeps the real bytes.
+    const PREVIEW_BYTES = 64 * 1024;
+    const previewBuffer = buffer.subarray(0, PREVIEW_BYTES);
+    // `buffer` may hold only the probe's head, so the real size is the
+    // declared total rather than what was actually read.
+    const shown = Math.min(buffer.byteLength, PREVIEW_BYTES);
+    const previewNote =
+      result.totalBytes > shown
+        ? `\n\n<showing the first ${shown.toLocaleString('en-US')} of ` +
+          `${result.totalBytes.toLocaleString('en-US')} bytes — ` +
+          `download for the complete file>`
+        : '';
+    const binaryBody = renderBytes(previewBuffer) + previewNote;
+
+    // A probe stopped at the headers, so there is no body to render and the
+    // size comes from Content-Length rather than from what was read.
+    const body = result.savedTo
+      ? `<saved to ${result.savedTo}>`
+      : binary
+      ? binaryBody
+      : buffer.toString('utf8');
+
     const response: ApiResponse = {
       status: result.status,
       statusText: result.statusText,
       headers: result.headers,
-      body: buffer.toString('utf8'),
+      binary,
+      // The raw head travels as base64 so the Raw tab can switch between hex
+      // formats without another request. Bounded to 64 KB.
+      ...(binary
+        ? {
+            headBase64: previewBuffer.toString('base64'),
+            headNote: previewNote,
+          }
+        : {}),
+      ...(result.probed ? { probed: true } : {}),
+      ...(result.savedTo ? { savedTo: result.savedTo } : {}),
+      body,
       bodyBytes: result.totalBytes,
       truncated: result.truncated,
       timing: {
@@ -659,7 +934,12 @@ export async function sendRequest(
       contentType,
     };
 
-    return { ok: true, response };
+    return {
+      ok: true,
+      response,
+      ...(result.probed ? { probed: true } : { bytes: buffer }),
+      ...(result.savedTo ? { savedTo: result.savedTo } : {}),
+    };
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     return {

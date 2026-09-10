@@ -25,6 +25,24 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand('telegraph.refresh', () => {
       workspace.refresh();
+    }),
+
+    vscode.commands.registerCommand('telegraph.backupAll', () => {
+      void workspace.backupAll();
+    }),
+
+    vscode.commands.registerCommand('telegraph.importAll', () => {
+      void workspace.importAllFolder();
+    }),
+
+    // Claims Cmd/Ctrl+S while a Telegraph panel is focused, so VS Code's own
+    // Save does not open a file dialog for a webview that has no document.
+    vscode.commands.registerCommand('telegraph.saveActive', () => {
+      // Ask both: a stale "active" flag on one kind must not swallow the
+      // keystroke meant for the other.
+      const handled = RequestPanel.saveActive();
+      EnvPanel.saveActive();
+      void handled;
     })
   );
 }

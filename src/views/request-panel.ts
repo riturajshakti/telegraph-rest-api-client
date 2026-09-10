@@ -9,6 +9,7 @@ import type { VarInfo } from '../core/messages';
 
 import type { HostToWebview, WebviewToHost } from '../core/messages';
 import type { Workspace } from '../core/workspace';
+import type { SendResult } from '../core/types';
 
 const VIEW_TYPE = 'telegraph.requestView';
 
@@ -21,8 +22,24 @@ function resolveOptions(): SendOptions {
   return {
     timeout: config.get<number>('requestTimeout', 0),
     followRedirects: config.get<boolean>('followRedirects', true),
-    responseLimitBytes: config.get<number>('responseLimit', 2) * 1024 * 1024,
+    responseLimitBytes: config.get<number>('responseLimit', 0) * 1024 * 1024,
   };
+}
+
+/** How the Raw tabs render binary bytes. */
+function hexViewFlags(): { rawHexView: boolean; rawHexOffsets: boolean } {
+  const config = vscode.workspace.getConfiguration('telegraph');
+  return {
+    rawHexView: config.get<boolean>('rawHexView', true),
+    rawHexOffsets: config.get<boolean>('rawHexOffsets', true),
+  };
+}
+
+/** Largest binary response that may be rendered as text, capped at 20 MB. */
+function binaryTextLimitBytes(): number {
+  const config = vscode.workspace.getConfiguration('telegraph');
+  const mb = Math.min(Math.max(config.get<number>('binaryTextLimit', 2), 0), 20);
+  return mb * 1024 * 1024;
 }
 
 export class RequestPanel {
@@ -70,6 +87,58 @@ export class RequestPanel {
     );
   }
 
+  private lastBytes: Uint8Array | undefined;
+  private lastUrl = '';
+  private lastContentType = '';
+
+  /** Picks a sensible save name from the URL, falling back to the MIME type. */
+  private static suggestFileName(url: string, contentType: string): string {
+    const EXT: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+      'image/avif': 'avif',
+      'image/bmp': 'bmp',
+      'image/tiff': 'tiff',
+      'image/x-icon': 'ico',
+      'video/mp4': 'mp4',
+      'video/webm': 'webm',
+      'video/quicktime': 'mov',
+      'video/x-msvideo': 'avi',
+      'audio/mpeg': 'mp3',
+      'audio/wav': 'wav',
+      'audio/ogg': 'ogg',
+      'audio/flac': 'flac',
+      'application/pdf': 'pdf',
+      'application/zip': 'zip',
+      'application/gzip': 'gz',
+      'application/x-tar': 'tar',
+      'application/wasm': 'wasm',
+      'application/epub+zip': 'epub',
+      'font/woff': 'woff',
+      'font/woff2': 'woff2',
+      'font/ttf': 'ttf',
+      'font/otf': 'otf',
+    };
+
+    let name = '';
+    try {
+      const parsed = new URL(url);
+      name = decodeURIComponent(parsed.pathname.split('/').pop() ?? '');
+    } catch {
+      name = '';
+    }
+
+    if (name && name.includes('.')) {
+      return name;
+    }
+
+    const mime = contentType.split(';')[0].trim().toLowerCase();
+    const ext = EXT[mime] ?? 'bin';
+    return `${name || 'response'}.${ext}`;
+  }
+
   static onRevealVariable: ((name: string) => Promise<void>) | null = null;
 
   private static markDirtyState(
@@ -78,6 +147,17 @@ export class RequestPanel {
   ): void {
     const base = panel.title.replace(/\s*●$/, '');
     panel.title = dirty ? `${base} ●` : base;
+  }
+
+  /** Tells the focused panel to save, for the Cmd/Ctrl+S keybinding. */
+  static saveActive(): boolean {
+    for (const panel of RequestPanel.panels.values()) {
+      if (panel.panel.active) {
+        panel.post({ type: 'saveRequested' });
+        return true;
+      }
+    }
+    return false;
   }
 
   static init(workspace: Workspace, extensionUri: vscode.Uri): void {
@@ -216,6 +296,129 @@ export class RequestPanel {
         break;
       }
 
+      case 'resendBinary': {
+        const scope = await RequestPanel.workspace.scopeFor(
+          message.request.colId
+        );
+        const resolved = resolveRequest(message.request, scope);
+
+        if (message.mode === 'text') {
+          this.post({ type: 'sending', hasUpload: false });
+          const result = await sendRequest(resolved, {
+            ...resolveOptions(),
+            binaryMode: 'text',
+          });
+          this.lastBytes = result.ok ? result.bytes : undefined;
+          this.lastUrl = resolved.url;
+          this.lastContentType = result.ok ? result.response.contentType : '';
+          const posted: SendResult = result.ok
+            ? { ok: true, response: result.response }
+            : result;
+          this.post({
+            type: 'result',
+            result: posted,
+            missing: [],
+            sentUrl: resolved.url,
+            binaryTextLimit: binaryTextLimitBytes(),
+          ...hexViewFlags(),
+            ...hexViewFlags(),
+          });
+          break;
+        }
+
+        const target = await vscode.window.showSaveDialog({
+          saveLabel: 'Save response',
+          defaultUri: vscode.Uri.file(
+            RequestPanel.suggestFileName(resolved.url, this.lastContentType)
+          ),
+        });
+        if (!target) {
+          break;
+        }
+
+        this.post({ type: 'downloadProgress', received: 0, total: 0 });
+        const signal = { aborted: false } as {
+          aborted: boolean;
+          onAbort?: () => void;
+        };
+        this.inFlight = signal;
+
+        const result = await sendRequest(resolved, {
+          ...resolveOptions(),
+          signal,
+          binaryMode: 'download',
+          downloadPath: target.fsPath,
+          onDownloadProgress: (received, total) => {
+            this.post({ type: 'downloadProgress', received, total });
+          },
+        });
+        this.inFlight = null;
+
+        if (result.ok) {
+          // Send the whole response so the view can show status, headers,
+          // cookies and redirects alongside the saved-file note.
+          this.post({
+            type: 'downloadDone',
+            path: target.fsPath,
+            bytes: result.response.bodyBytes,
+            result: { ok: true, response: result.response },
+            sentUrl: resolved.url,
+            binaryTextLimit: binaryTextLimitBytes(),
+          ...hexViewFlags(),
+            ...hexViewFlags(),
+          });
+        } else {
+          // Put the response area back so the view is not stuck on
+          // "Cancelling...", and report why the download stopped.
+          this.post({
+            type: 'result',
+            result,
+            missing: [],
+            sentUrl: resolved.url,
+            binaryTextLimit: binaryTextLimitBytes(),
+          ...hexViewFlags(),
+            ...hexViewFlags(),
+          });
+          if (!/cancelled/i.test(result.error.message)) {
+            void vscode.window.showErrorMessage(
+              `Download failed: ${result.error.message}`
+            );
+          }
+        }
+        break;
+      }
+
+      case 'revealFile': {
+        if (message.path) {
+          await vscode.commands.executeCommand(
+            'revealFileInOS',
+            vscode.Uri.file(message.path)
+          );
+        }
+        break;
+      }
+
+      case 'downloadBody': {
+        if (!this.lastBytes) {
+          void vscode.window.showWarningMessage('No response body to download.');
+          break;
+        }
+        const target = await vscode.window.showSaveDialog({
+          saveLabel: 'Save response',
+          defaultUri: vscode.Uri.file(
+            RequestPanel.suggestFileName(this.lastUrl, this.lastContentType)
+          ),
+        });
+        if (!target) {
+          break;
+        }
+        await vscode.workspace.fs.writeFile(target, this.lastBytes);
+        void vscode.window.showInformationMessage(
+          `Saved ${this.lastBytes.byteLength.toLocaleString('en-US')} bytes.`
+        );
+        break;
+      }
+
       case 'buildCurl': {
         const scope = await RequestPanel.workspace.scopeFor(
           message.request.colId
@@ -274,6 +477,9 @@ export class RequestPanel {
         const result = await sendRequest(resolved, {
           ...resolveOptions(),
           signal,
+          // Stop at the headers for a binary payload: the view offers a choice
+          // and the body is fetched only once that choice is made.
+          binaryMode: 'probe',
           onBodyPrepared: (info) => {
             this.post({ type: 'sentBody', info });
           },
@@ -292,7 +498,23 @@ export class RequestPanel {
             : {}),
         });
         this.inFlight = null;
-        this.post({ type: 'result', result, missing, sentUrl: resolved.url });
+        this.lastBytes = result.ok ? result.bytes : undefined;
+        this.lastUrl = resolved.url;
+        this.lastContentType = result.ok ? result.response.contentType : '';
+        // The raw bytes stay on the host: they are only needed for a download,
+        // and posting a large buffer across the webview boundary is wasteful
+        // and can drop the whole message.
+        const posted: SendResult = result.ok
+          ? { ok: true, response: result.response }
+          : result;
+        this.post({
+          type: 'result',
+          result: posted,
+          missing,
+          sentUrl: resolved.url,
+          binaryTextLimit: binaryTextLimitBytes(),
+          ...hexViewFlags(),
+        });
 
         await RequestPanel.workspace.recordHistory(
           this.request,
@@ -443,6 +665,19 @@ export class RequestPanel {
 
       case 'revealVariable':
         await RequestPanel.onRevealVariable?.(message.name);
+        break;
+
+      case 'setHexView':
+        await vscode.workspace
+          .getConfiguration('telegraph')
+          .update('rawHexView', message.hex, vscode.ConfigurationTarget.Global);
+        await vscode.workspace
+          .getConfiguration('telegraph')
+          .update(
+            'rawHexOffsets',
+            message.offsets,
+            vscode.ConfigurationTarget.Global
+          );
         break;
 
       case 'setFollowRedirects':

@@ -12,6 +12,7 @@ import {
 import { parseSetCookie, type Cookie } from '../core/cookies';
 import { FoldedView } from './components/folded-view';
 import { FindBar } from './components/find-bar';
+import { renderHead } from './components/hex-view';
 import { HTTP_METHODS } from '../core/types';
 import type {
   ApiRequest,
@@ -29,8 +30,10 @@ import {
 } from '../core/formatters';
 import {
   toRawHttp,
+  toRawHttpResponse,
   fromRawHttp,
   type SentBodyInfo,
+  type SentFileInfo,
 } from '../core/raw-http';
 
 declare function acquireVsCodeApi(): {
@@ -111,6 +114,7 @@ class RequestView {
   private rawRevertButton!: HTMLButtonElement;
   private rawDirty = false;
   private rawFileActions!: HTMLDivElement;
+  private rawHexSwitches!: HTMLElement;
   private lastSentBody: SentBodyInfo | undefined;
   private loadedFileBytes = new Map<string, string>();
   private responseFind: FindBar | null = null;
@@ -331,6 +335,10 @@ class RequestView {
       'aria-label': 'Copy as cURL',
     }, ['⧉ cURL']) as HTMLButtonElement;
     this.curlButton.addEventListener('click', () => {
+      if (!this.urlField.getValue().trim()) {
+        this.flashToast('Nothing to copy — enter a URL first');
+        return;
+      }
       vscode.postMessage({ type: 'buildCurl', request: this.collect() });
     });
 
@@ -544,7 +552,7 @@ class RequestView {
 
     this.bodyFormTable = new KeyValueTable(
       'Field',
-      'Value or file path',
+      'Value or file',
       () => {
         this.request.body.form = this.bodyFormTable.getRows();
         this.markDirty();
@@ -824,17 +832,21 @@ class RequestView {
     copyBtn.addEventListener('click', () => {
       void navigator.clipboard.writeText(this.rawEditor.getValue());
       flash(copyBtn);
+      this.flashToast('Raw request copied');
     });
 
     this.rawFileActions = el('div', {
       class: 'raw-file-actions hidden',
     }) as HTMLDivElement;
 
+    this.rawHexSwitches = el('span', { class: 'hex-switches hidden' });
+
     return el('div', { class: 'raw-panel' }, [
       el('div', { class: 'body-toolbar' }, [
         this.rawApplyButton,
         this.rawRevertButton,
         copyBtn,
+        this.rawHexSwitches,
       ]),
       this.rawFileActions,
       el('p', { class: 'env-hint' }, [
@@ -843,6 +855,20 @@ class RequestView {
       this.rawError,
       this.rawEditor.element,
     ]);
+  }
+
+  /** The switches only make sense when there are bytes to reformat. */
+  private syncRawHexSwitches(): void {
+    if (!this.rawHexSwitches) {
+      return;
+    }
+    const show = this.hasReformattableFiles();
+    this.rawHexSwitches.classList.toggle('hidden', !show);
+    if (show && this.rawHexSwitches.childElementCount === 0) {
+      this.rawHexSwitches.append(
+        this.buildHexSwitches(() => this.renderRawWithFiles())
+      );
+    }
   }
 
   private syncRawButtons(): void {
@@ -861,11 +887,16 @@ class RequestView {
     clear(this.rawFileActions);
 
     const request = this.request;
+    // A truncated preview still needs the loader: the head is shown, but the
+    // rest of the file is not.
     const alreadyShown = (name: string): boolean =>
       this.loadedFileBytes.has(name) ||
       Boolean(
         this.lastSentBody?.files?.find(
-          (s) => s.name === name && s.preview !== undefined
+          (s) =>
+            s.name === name &&
+            s.preview !== undefined &&
+            !s.previewTruncated
         )
       );
 
@@ -961,22 +992,53 @@ class RequestView {
   }
 
   private mergedBodyInfo(): SentBodyInfo | undefined {
-    return this.loadedFileBytes.size > 0
-      ? {
-          ...(this.lastSentBody ?? { totalBytes: 0 }),
-          files: [
-            ...[...this.loadedFileBytes].map(([name, preview]) => ({
-              name,
-              fileName: name,
-              bytes: preview.length,
-              preview,
-            })),
-            ...(this.lastSentBody?.files ?? []),
-          ].filter(
-            (f, i, all) => all.findIndex((x) => x.name === f.name) === i
-          ),
-        }
-      : this.lastSentBody;
+    const merged =
+      this.loadedFileBytes.size > 0
+        ? {
+            ...(this.lastSentBody ?? { totalBytes: 0 }),
+            files: [
+              ...[...this.loadedFileBytes].map(
+                ([name, preview]): SentFileInfo => ({
+                  name,
+                  fileName: name,
+                  bytes: preview.length,
+                  preview,
+                })
+              ),
+              ...(this.lastSentBody?.files ?? []),
+            ].filter(
+              (f, i, all) => all.findIndex((x) => x.name === f.name) === i
+            ),
+          }
+        : this.lastSentBody;
+
+    if (!merged?.files?.length) {
+      return merged;
+    }
+
+    // The host renders each preview with offsets; re-format it here so the
+    // switches take effect without re-sending the request.
+    return {
+      ...merged,
+      files: merged.files.map((file) =>
+        file.previewBase64 === undefined
+          ? file
+          : {
+              ...file,
+              preview: renderHead(file.previewBase64, file.previewNote ?? '', {
+                hex: this.hexView,
+                offsets: this.hexOffsets,
+              }),
+            }
+      ),
+    };
+  }
+
+  /** True once a file part carries bytes the hex switches can reformat. */
+  private hasReformattableFiles(): boolean {
+    return Boolean(
+      this.mergedBodyInfo()?.files?.some((f) => f.previewBase64 !== undefined)
+    );
   }
 
   /** Re-renders the Raw tab from the current field values. */
@@ -987,6 +1049,7 @@ class RequestView {
 
     this.renderRawWithFiles();
     this.syncFileActions();
+    this.syncRawHexSwitches();
     this.rawDirty = false;
     this.rawError.classList.add('hidden');
     this.syncRawButtons();
@@ -1257,11 +1320,22 @@ class RequestView {
     this.flashToast('cURL copied to clipboard');
   }
 
-  private flashToast(text: string): void {
+  private toastTimers: number[] = [];
+
+  /** Shows a transient message, replacing any toast still on screen. */
+  flashToast(text: string): void {
+    for (const timer of this.toastTimers) {
+      clearTimeout(timer);
+    }
+    this.toastTimers = [];
+    document.querySelector('.toast')?.remove();
+
     const toast = el('div', { class: 'toast' }, [text]);
     document.body.append(toast);
-    setTimeout(() => toast.classList.add('fade'), 1600);
-    setTimeout(() => toast.remove(), 2200);
+    this.toastTimers.push(
+      window.setTimeout(() => toast.classList.add('fade'), 1600),
+      window.setTimeout(() => toast.remove(), 2200)
+    );
   }
 
   onFilePicked(path: string): void {
@@ -1412,7 +1486,22 @@ class RequestView {
     )} of ${formatBytes(total)}`;
   }
 
-  setResult(result: SendResult, missing: string[] = [], sentUrl = ''): void {
+  setResult(
+    result: SendResult,
+    missing: string[] = [],
+    sentUrl = '',
+    binaryTextLimit = 2 * 1024 * 1024,
+    rawHexView = true,
+    rawHexOffsets = true
+  ): void {
+    this.binaryTextLimit = binaryTextLimit;
+    this.hexView = rawHexView;
+    this.hexOffsets = rawHexOffsets;
+    this.showBinaryAsText = false;
+    // Any completed result clears an in-progress download view.
+    this.downloadBar = null;
+    this.downloadLabel = null;
+    this.lastResponse = result.ok ? result.response : null;
     this.sendButton.disabled = false;
     this.sendButton.textContent = 'Send';
 
@@ -1598,6 +1687,7 @@ class RequestView {
     copy.addEventListener('click', () => {
       void navigator.clipboard.writeText(asText);
       flash(copy);
+      this.flashToast('Redirect chain copied');
     });
 
     return el('div', { class: 'tab-panel' }, [
@@ -1648,6 +1738,7 @@ class RequestView {
     copyBody.addEventListener('click', () => {
       void navigator.clipboard.writeText(pretty);
       flash(copyBody);
+      this.flashToast('Response body copied');
     });
 
     const foldToggle = el('button', {
@@ -1713,8 +1804,18 @@ class RequestView {
 
     const hopCount = response.hops?.length ?? 0;
 
+    // A binary payload replaces the body panel only; the other tabs still
+    // describe the response and must stay reachable.
+    const primaryPanel = this.downloading
+      ? this.buildDownloadingPanel()
+      : this.savedFile
+      ? this.buildSavedFilePanel()
+      : response.binary && !this.showBinaryAsText
+      ? this.buildBinaryChoicePanel(response)
+      : bodyPanel;
+
     const panels = new Map<string, HTMLElement>([
-      ['body', bodyPanel],
+      ['body', primaryPanel],
       ['headers', headersPanel],
       ['cookies', cookiesPanel],
     ]);
@@ -1729,6 +1830,9 @@ class RequestView {
       panels.set('redirects', this.buildRedirectsPanel(response));
       tabs.push(['redirects', `Redirects (${hopCount})`]);
     }
+
+    panels.set('raw', this.buildRawResponsePanel(response));
+    tabs.push(['raw', 'Raw']);
 
     const bar = el('div', { class: 'tab-bar' });
     const buttons = new Map<string, HTMLButtonElement>();
@@ -1755,6 +1859,315 @@ class RequestView {
       bar,
       el('div', { class: 'tab-panels' }, [...panels.values()]),
     ]);
+  }
+
+  /** The response exactly as it came off the wire: status line, headers, body. */
+  private showBinaryAsText = false;
+  private binaryTextLimit = 2 * 1024 * 1024;
+  private hexView = true;
+  private hexOffsets = true;
+  private downloadBar: HTMLDivElement | null = null;
+  private downloadLabel: HTMLDivElement | null = null;
+
+  /** Replaces the choice panel with live progress while bytes stream to disk. */
+  private lastResponse: ApiResponse | null = null;
+
+  /** The progress view, built once and then only updated, so the tab bar and
+   *  the selected tab survive every progress tick. */
+  private buildDownloadingPanel(): HTMLElement {
+    this.downloadBar = el('div', { class: 'upload-bar' }, [
+      el('div', { class: 'upload-fill' }),
+    ]) as HTMLDivElement;
+    this.downloadLabel = el('div', { class: 'upload-label' }, [
+      'Downloading...',
+    ]) as HTMLDivElement;
+
+    const abort = el('button', {
+      class: 'btn btn-ghost btn-compact',
+      type: 'button',
+    }, ['Cancel download']) as HTMLButtonElement;
+    abort.addEventListener('click', () => {
+      vscode.postMessage({ type: 'abort' });
+      abort.disabled = true;
+      abort.textContent = 'Cancelling...';
+    });
+
+    return el('div', { class: 'tab-panel active binary-choice' }, [
+      el('div', { class: 'sending-state' }, [
+        this.downloadBar,
+        this.downloadLabel,
+        abort,
+      ]),
+    ]);
+  }
+
+  onDownloadProgress(received: number, total: number): void {
+    if (!this.downloadBar) {
+      // Rebuild the whole response view once, with the progress panel as the
+      // body, so headers, cookies and redirects stay reachable while the file
+      // downloads. Later ticks only touch the bar and the label.
+      this.downloading = true;
+      clear(this.responseArea);
+      if (this.lastResponse) {
+        // buildResponseBody picks the progress panel while `downloading` is
+        // set, and wraps it in the usual tab container.
+        this.responseArea.append(
+          this.buildStatusBar(this.lastResponse),
+          this.buildResponseBody(this.lastResponse)
+        );
+      } else {
+        this.responseArea.append(this.buildDownloadingPanel());
+      }
+      this.downloading = false;
+    }
+
+    if (!this.downloadBar) {
+      return;
+    }
+
+    const fill = this.downloadBar.querySelector<HTMLElement>('.upload-fill');
+    if (total > 0) {
+      const percent = Math.round((received / total) * 100);
+      if (fill) {
+        fill.style.width = `${percent}%`;
+      }
+      if (this.downloadLabel) {
+        this.downloadLabel.textContent =
+          `Downloading ${percent}% — ${formatBytes(received)} of ${formatBytes(total)}`;
+      }
+      return;
+    }
+
+    if (this.downloadLabel) {
+      this.downloadLabel.textContent = `Downloading — ${formatBytes(received)}`;
+    }
+  }
+
+  onDownloadDone(
+    path: string,
+    bytes: number,
+    result: SendResult,
+    sentUrl: string,
+    binaryTextLimit?: number
+  ): void {
+    this.downloadBar = null;
+    this.downloadLabel = null;
+    this.savedFile = { path, bytes };
+    this.setResult(result, [], sentUrl, binaryTextLimit);
+    this.savedFile = null;
+    this.flashToast('Download complete');
+  }
+
+  /** Set while rendering a response whose body went straight to disk. */
+  private savedFile: { path: string; bytes: number } | null = null;
+  private downloading = false;
+
+  private buildSavedFilePanel(): HTMLElement {
+    const saved = this.savedFile;
+    const reveal = el('button', {
+      class: 'btn btn-ghost btn-compact',
+      type: 'button',
+    }, ['Show in folder']) as HTMLButtonElement;
+    reveal.addEventListener('click', () => {
+      vscode.postMessage({ type: 'revealFile', path: saved?.path ?? '' });
+    });
+
+    return el('div', { class: 'tab-panel active binary-choice' }, [
+      el('div', { class: 'binary-note' }, [
+        el('strong', {}, [`Saved ${formatBytes(saved?.bytes ?? 0)}`]),
+        el('p', { class: 'saved-path' }, [saved?.path ?? '']),
+        el('div', { class: 'binary-actions' }, [reveal]),
+      ]),
+    ]);
+  }
+
+  /**
+   * Binary payloads are offered as a download by default; rendering the bytes
+   * as text is opt-in, since it is only useful for inspection.
+   */
+  private buildBinaryChoicePanel(response: ApiResponse): HTMLElement {
+    const size = response.bodyBytes > 0 ? formatBytes(response.bodyBytes) : 'unknown size';
+    const type = response.contentType.split(';')[0].trim() || 'binary data';
+
+    const download = el('button', {
+      class: 'btn btn-primary',
+      type: 'button',
+    }, ['Download file']) as HTMLButtonElement;
+    download.addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'resendBinary',
+        mode: 'download',
+        request: this.collect(),
+      });
+    });
+
+    // Rendering a very large binary payload as text is slow and rarely
+    // useful, so above the configured limit only the download is offered.
+    const textAllowed =
+      this.binaryTextLimit > 0 && response.bodyBytes <= this.binaryTextLimit;
+
+    const asText = el('button', {
+      class: 'btn btn-ghost',
+      type: 'button',
+    }, ['Show as text']) as HTMLButtonElement;
+    asText.addEventListener('click', () => {
+      this.showBinaryAsText = true;
+      vscode.postMessage({
+        type: 'resendBinary',
+        mode: 'text',
+        request: this.collect(),
+      });
+    });
+
+    return el('div', { class: 'tab-panel active binary-choice' }, [
+      el('div', { class: 'binary-note' }, [
+        el('strong', {}, [`${type} — ${size}`]),
+        el('p', {}, [
+          response.probed
+            ? 'This response is binary. Nothing has been transferred yet — ' +
+              'choose to download the file, or fetch it and show the bytes as text.'
+            : 'This response is binary, so it is not shown as text. Download ' +
+              'it to get the exact bytes, or display them for inspection.',
+        ]),
+        el('div', { class: 'binary-actions' }, [
+          download,
+          ...(textAllowed ? [asText] : []),
+        ]),
+        ...(textAllowed
+          ? []
+          : [
+              el('p', { class: 'binary-limit-note' }, [
+                `Too large to show as text (limit ${formatBytes(
+                  this.binaryTextLimit
+                )}). Change telegraph.binaryTextLimit to adjust.`,
+              ]),
+            ]),
+      ]),
+    ]);
+  }
+
+  /**
+   * The hex switches. `onChange` re-renders whichever view owns them; the
+   * choice is persisted so it survives reloads.
+   */
+  private buildHexSwitches(onChange: () => void): HTMLElement {
+    const offsetsSwitch = el('span', {
+      class: `resp-switch hex-switch${this.hexOffsets ? ' on' : ''}`,
+      role: 'switch',
+      tabindex: '0',
+      title: 'Show the offset column and ASCII gutter',
+      'aria-checked': String(this.hexOffsets),
+      'aria-label': 'Offsets and ASCII',
+    }, [el('span', { class: 'resp-switch-track' }), 'Offsets & ASCII']);
+
+    const syncOffsets = (): void => {
+      offsetsSwitch.classList.toggle('disabled', !this.hexView);
+      offsetsSwitch.setAttribute('aria-disabled', String(!this.hexView));
+    };
+
+    const hexSwitch = el('span', {
+      class: `resp-switch hex-switch${this.hexView ? ' on' : ''}`,
+      role: 'switch',
+      tabindex: '0',
+      title: 'Show the bytes as a hex dump instead of decoded text',
+      'aria-checked': String(this.hexView),
+      'aria-label': 'Hex view',
+    }, [el('span', { class: 'resp-switch-track' }), 'Hex view']);
+
+    const persist = (): void => {
+      vscode.postMessage({
+        type: 'setHexView',
+        hex: this.hexView,
+        offsets: this.hexOffsets,
+      });
+    };
+
+    const flipHex = (): void => {
+      this.hexView = !this.hexView;
+      hexSwitch.classList.toggle('on', this.hexView);
+      hexSwitch.setAttribute('aria-checked', String(this.hexView));
+      syncOffsets();
+      persist();
+      onChange();
+    };
+
+    const flipOffsets = (): void => {
+      if (!this.hexView) {
+        return;
+      }
+      this.hexOffsets = !this.hexOffsets;
+      offsetsSwitch.classList.toggle('on', this.hexOffsets);
+      offsetsSwitch.setAttribute('aria-checked', String(this.hexOffsets));
+      persist();
+      onChange();
+    };
+
+    for (const [control, flip] of [
+      [hexSwitch, flipHex],
+      [offsetsSwitch, flipOffsets],
+    ] as [HTMLElement, () => void][]) {
+      control.addEventListener('click', flip);
+      control.addEventListener('keydown', (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          flip();
+        }
+      });
+    }
+
+    syncOffsets();
+    return el('span', { class: 'hex-switches' }, [hexSwitch, offsetsSwitch]);
+  }
+
+  private buildRawResponsePanel(response: ApiResponse): HTMLElement {
+    const head =
+      `HTTP/1.1 ${response.status} ${response.statusText}`.trim() +
+      '\n' +
+      response.headers.map((h) => `${h.name}: ${h.value}`).join('\n');
+
+    // A binary body is reformatted in the webview from the base64 head, so the
+    // switches never need another request.
+    const canSwitch = typeof response.headBase64 === 'string';
+
+    const compose = (): string => {
+      if (!canSwitch) {
+        return toRawHttpResponse(response);
+      }
+      const body = renderHead(response.headBase64 ?? '', response.headNote ?? '', {
+        hex: this.hexView,
+        offsets: this.hexOffsets,
+      });
+      return body ? `${head}\n\n${body}` : head;
+    };
+
+    const pre = el('pre', { class: 'response-body' }, [compose()]);
+
+    const copyRaw = el('button', {
+      class: 'icon-btn',
+      type: 'button',
+      title: 'Copy raw response',
+      'aria-label': 'Copy raw response',
+    }, ['\u29c9']) as HTMLButtonElement;
+    copyRaw.addEventListener('click', () => {
+      void navigator.clipboard.writeText(pre.textContent ?? '');
+      flash(copyRaw);
+      this.flashToast('Raw response copied');
+    });
+
+    const toolbar = el('div', { class: 'response-toolbar' }, [
+      el('span', { class: 'response-lang' }, ['HTTP']),
+      copyRaw,
+    ]);
+
+    if (canSwitch) {
+      toolbar.append(
+        this.buildHexSwitches(() => {
+          pre.textContent = compose();
+        })
+      );
+    }
+
+    return el('div', { class: 'tab-panel' }, [toolbar, pre]);
   }
 
   private buildHeadersPanelFor(response: ApiResponse): HTMLElement {
@@ -1795,6 +2208,7 @@ class RequestView {
     copy.addEventListener('click', () => {
       void navigator.clipboard.writeText(raw);
       flash(copy);
+      this.flashToast('Headers copied');
     });
 
     let rawVisible = false;
@@ -2034,6 +2448,21 @@ if (root) {
       case 'sentBody':
         view.onSentBody(message.info);
         break;
+      case 'saveRequested':
+        view.requestSave();
+        break;
+      case 'downloadProgress':
+        view.onDownloadProgress(message.received, message.total);
+        break;
+      case 'downloadDone':
+        view.onDownloadDone(
+          message.path,
+          message.bytes,
+          message.result,
+          message.sentUrl,
+          message.binaryTextLimit
+        );
+        break;
       case 'streamStart':
         view.onStreamStart(message);
         break;
@@ -2055,7 +2484,14 @@ if (root) {
         view.onFileBytesError(message.field, message.message);
         break;
       case 'result':
-        view.setResult(message.result, message.missing, message.sentUrl);
+        view.setResult(
+          message.result,
+          message.missing,
+          message.sentUrl,
+          message.binaryTextLimit,
+          message.rawHexView,
+          message.rawHexOffsets
+        );
         break;
     }
   });

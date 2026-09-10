@@ -112,8 +112,8 @@ try {
       totalBytes,
       truncated,
       note: truncated
-        ? `\n\n<truncated — showing the first ${maxBytes.toLocaleString()} of ` +
-          `${totalBytes.toLocaleString()} bytes>`
+        ? `\n\n<truncated — showing the first ${maxBytes.toLocaleString('en-US')} of ` +
+          `${totalBytes.toLocaleString('en-US')} bytes>`
         : '',
     });
   });

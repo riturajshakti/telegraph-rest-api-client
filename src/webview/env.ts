@@ -15,6 +15,7 @@ export type EnvToHost =
   | { type: 'convertEnv'; colId: string; to: 'embedded' | 'linked' };
 
 export type HostToEnv =
+  | { type: 'saveRequested' }
   | { type: 'initEnv'; environment: Environment; focusKey?: string }
   | {
       type: 'initCollection';
@@ -78,6 +79,7 @@ class EnvView {
 
   showEnvironment(environment: Environment, focusKey?: string): void {
     this.environment = environment;
+    this.colId = '';
     this.dirty = false;
     clear(this.root);
 
@@ -100,21 +102,40 @@ class EnvView {
       vscode.postMessage({ type: 'linkDotenv' })
     );
 
+    const dotfileInfo = el('button', {
+      class: 'icon-btn dotfile-info',
+      type: 'button',
+      title: `${dotfileWarningTitle()}${dotfileHint()}`,
+      'aria-label': 'Why can I not see my .env file?',
+    }, ['\u24d8']) as HTMLButtonElement;
+
+    const dotfilePopup = el('div', { class: 'dotfile-popup hidden' }, [
+      el('strong', {}, [dotfileWarningTitle()]),
+      dotfileHint(),
+    ]);
+
+    dotfileInfo.addEventListener('click', (event) => {
+      event.stopPropagation();
+      dotfilePopup.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () =>
+      dotfilePopup.classList.add('hidden')
+    );
+
     this.root.append(
       el('div', { class: 'env-page' }, [
         el('div', { class: 'env-header' }, [
           el('h2', { class: 'env-title' }, [environment.name]),
-          linkBtn,
+          el('div', { class: 'env-header-center' }, [
+            linkBtn,
+            el('span', { class: 'dotfile-wrap' }, [dotfileInfo, dotfilePopup]),
+          ]),
           this.saveButton,
         ]),
         el('p', { class: 'env-hint' }, [
           environment.dotenvPath
             ? `Linked to ${environment.dotenvPath} — use the sidebar menu to reload from disk. Reference with {{name}}.`
             : 'Reference these anywhere in a request with {{name}} — URL, headers, query, body, or auth.',
-        ]),
-        el('div', { class: 'env-warning' }, [
-          el('strong', {}, [dotfileWarningTitle()]),
-          dotfileHint(),
         ]),
         this.table.element,
       ])
@@ -148,6 +169,15 @@ class EnvView {
     }
   }
 
+  /** Routes Cmd/Ctrl+S to whichever editor this panel is showing. */
+  requestSave(): void {
+    if (this.environment) {
+      this.saveEnv();
+    } else if (this.colId) {
+      this.saveSettings();
+    }
+  }
+
   private saveEnv(): void {
     if (!this.environment || !this.dirty) {
       return;
@@ -163,6 +193,7 @@ class EnvView {
     available: { id: string; name: string; dotenv?: boolean }[]
   ): void {
     this.colId = colId;
+    this.environment = null;
     this.settings = settings;
     this.available = available;
     this.dirty = false;
@@ -335,6 +366,10 @@ if (root) {
 
   window.addEventListener('message', (event: MessageEvent<HostToEnv>) => {
     const message = event.data;
+    if (message.type === 'saveRequested') {
+      view.requestSave();
+      return;
+    }
     if (message.type === 'initEnv') {
       view.showEnvironment(message.environment, message.focusKey);
     } else if (message.type === 'initCollection') {
@@ -352,7 +387,7 @@ if (root) {
   window.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 's') {
       event.preventDefault();
-      document.querySelector<HTMLButtonElement>('.env-header .btn')?.click();
+      view.requestSave();
     }
   });
 

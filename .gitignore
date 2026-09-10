@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.vsix
+notes-0.2.0.md
 .DS_Store
 package-lock.json
 bun.lock

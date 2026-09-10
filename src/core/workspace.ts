@@ -1280,24 +1280,72 @@ export class Workspace {
 
   async importFile(): Promise<void> {
     const picked = await vscode.window.showOpenDialog({
-      canSelectMany: false,
+      canSelectMany: true,
       openLabel: 'Import',
       filters: { 'JSON files': ['json'] },
     });
-    if (!picked?.[0]) {
+    if (!picked?.length) {
       return;
     }
 
-    let raw: unknown;
-    try {
-      const bytes = await vscode.workspace.fs.readFile(picked[0]);
-      raw = JSON.parse(Buffer.from(bytes).toString('utf8'));
-    } catch (err) {
-      void vscode.window.showErrorMessage(
-        `Could not read that file: ${(err as Error).message}`
+    const imported: string[] = [];
+    const failed: { name: string; reason: string }[] = [];
+
+    for (const uri of picked) {
+      const name = uri.path.split('/').pop() ?? 'file';
+      try {
+        const result = await this.importOne(uri);
+        if (result) {
+          imported.push(result);
+        } else {
+          failed.push({ name, reason: 'unrecognized format' });
+        }
+      } catch (err) {
+        failed.push({ name, reason: (err as Error).message });
+      }
+    }
+
+    if (imported.length > 0) {
+      this.notify();
+    }
+
+    if (failed.length === 0 && imported.length === 1) {
+      void vscode.window.showInformationMessage(`Imported ${imported[0]}.`);
+      return;
+    }
+
+    if (failed.length === 0) {
+      void vscode.window.showInformationMessage(
+        `Imported ${imported.length} files: ${imported.join(', ')}.`
       );
       return;
     }
+
+    const detail = failed
+      .map((f) => `${f.name} (${f.reason})`)
+      .join(', ');
+
+    if (imported.length === 0) {
+      void vscode.window.showErrorMessage(
+        `Could not import: ${detail}. Supported: Telegraph export, Postman ` +
+          `collection or environment (v2.1), OpenAPI/Swagger JSON.`
+      );
+      return;
+    }
+
+    void vscode.window.showWarningMessage(
+      `Imported ${imported.length} of ${picked.length}. Skipped: ${detail}.`
+    );
+  }
+
+  /**
+   * Imports a single file, returning a short description of what was created,
+   * or null when the format is not recognized. Throws only on read/parse
+   * failure so the caller can report per-file outcomes.
+   */
+  private async importOne(uri: vscode.Uri): Promise<string | null> {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const raw: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'));
 
     const telegraph = fromTelegraph(raw);
     if (telegraph) {
@@ -1310,40 +1358,25 @@ export class Workspace {
         await this.storage.saveEnvironment(env);
       }
       await this.setExpanded(telegraph.collection._id, true);
-      this.notify();
-      void vscode.window.showInformationMessage(
-        `Imported "${telegraph.collection.colName}" (${telegraph.collection.requests.length} requests, ${telegraph.environments.length} environments).`
-      );
-      return;
+      return `"${telegraph.collection.colName}" (${telegraph.collection.requests.length} requests, ${telegraph.environments.length} environments)`;
     }
 
     const postmanEnv = fromPostmanEnvironment(raw);
     if (postmanEnv) {
       postmanEnv.sortNum = nextSort(await this.storage.listEnvironments());
       await this.storage.saveEnvironment(postmanEnv);
-      this.notify();
-      void vscode.window.showInformationMessage(
-        `Imported environment "${postmanEnv.name}" (${postmanEnv.data.length} variables).`
-      );
-      return;
+      return `environment "${postmanEnv.name}" (${postmanEnv.data.length} variables)`;
     }
 
-    const collection =
-      fromPostmanCollection(raw) ?? fromOpenApi(raw);
+    const collection = fromPostmanCollection(raw) ?? fromOpenApi(raw);
     if (collection) {
       collection.sortNum = nextSort(await this.storage.listCollections());
       await this.storage.saveCollection(collection);
       await this.setExpanded(collection._id, true);
-      this.notify();
-      void vscode.window.showInformationMessage(
-        `Imported "${collection.colName}" (${collection.requests.length} requests).`
-      );
-      return;
+      return `"${collection.colName}" (${collection.requests.length} requests)`;
     }
 
-    void vscode.window.showErrorMessage(
-      'Unrecognized file. Supported: Telegraph export, Postman collection or environment (v2.1), OpenAPI/Swagger JSON.'
-    );
+    return null;
   }
 
   async importCurl(): Promise<ApiRequest | undefined> {
@@ -1364,6 +1397,258 @@ export class Workspace {
       return undefined;
     }
     return request;
+  }
+
+  /**
+   * Writes every collection and environment to a timestamped folder, each in
+   * Telegraph format, so the whole workspace can be restored by importing them.
+   */
+  /**
+   * Restores a folder produced by `backupAll`: every file under collections/
+   * and environments/, plus activity.json. Existing data is kept; imported
+   * items are appended, so a restore never destroys what is already there.
+   */
+  async importAllFolder(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: 'Import this folder',
+      title: 'Choose a Telegraph backup folder',
+    });
+    if (!picked?.[0]) {
+      return;
+    }
+
+    const root = picked[0];
+    let collections = 0;
+    let environments = 0;
+    let activity = 0;
+    const failed: string[] = [];
+
+    const readDir = async (
+      dir: vscode.Uri
+    ): Promise<[string, vscode.FileType][]> => {
+      try {
+        return await vscode.workspace.fs.readDirectory(dir);
+      } catch {
+        return [];
+      }
+    };
+
+    // Collections and environments both go through the single-file importer,
+    // so a backup folder and a hand-made folder of exports behave the same.
+    for (const sub of ['collections', 'environments']) {
+      const dir = vscode.Uri.joinPath(root, sub);
+      for (const [name, kind] of await readDir(dir)) {
+        if (kind !== vscode.FileType.File || !name.endsWith('.json')) {
+          continue;
+        }
+        try {
+          const result = await this.importOne(vscode.Uri.joinPath(dir, name));
+          if (result === null) {
+            failed.push(name);
+          } else if (sub === 'collections') {
+            collections += 1;
+          } else {
+            environments += 1;
+          }
+        } catch (err) {
+          void err;
+          failed.push(name);
+        }
+      }
+    }
+
+    // Loose .json files at the top level are treated as exports too, so a
+    // folder of individual exports imports cleanly.
+    for (const [name, kind] of await readDir(root)) {
+      if (
+        kind !== vscode.FileType.File ||
+        !name.endsWith('.json') ||
+        name === 'activity.json'
+      ) {
+        continue;
+      }
+      try {
+        const result = await this.importOne(vscode.Uri.joinPath(root, name));
+        if (result === null) {
+          failed.push(name);
+        } else {
+          collections += 1;
+        }
+      } catch (err) {
+        void err;
+        failed.push(name);
+      }
+    }
+
+    const activityUri = vscode.Uri.joinPath(root, 'activity.json');
+    try {
+      const bytes = await vscode.workspace.fs.readFile(activityUri);
+      const parsed: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'));
+      const entries = Array.isArray(parsed)
+        ? parsed
+        : (parsed as { activity?: unknown }).activity;
+
+      if (Array.isArray(entries)) {
+        const existing = await this.storage.listHistory();
+        const seen = new Set(existing.map((e) => e._id));
+        const merged = [...existing];
+        for (const entry of entries as HistoryEntry[]) {
+          if (entry && typeof entry._id === 'string' && !seen.has(entry._id)) {
+            seen.add(entry._id);
+            merged.push(entry);
+            activity += 1;
+          }
+        }
+        if (activity > 0) {
+          await this.storage.replaceHistory(merged);
+        }
+      }
+    } catch {
+      // No activity.json in this folder, which is fine.
+    }
+
+    this.notify();
+
+    const total = collections + environments + activity;
+    if (total === 0) {
+      void vscode.window.showWarningMessage(
+        failed.length > 0
+          ? `Nothing imported. Unrecognized: ${failed.join(', ')}.`
+          : 'That folder held no Telegraph collections, environments, or activity.'
+      );
+      return;
+    }
+
+    const summary =
+      `Imported ${collections} collection${collections === 1 ? '' : 's'}, ` +
+      `${environments} environment${environments === 1 ? '' : 's'}, and ` +
+      `${activity} activity entr${activity === 1 ? 'y' : 'ies'}.`;
+
+    if (failed.length > 0) {
+      void vscode.window.showWarningMessage(
+        `${summary} Skipped: ${failed.join(', ')}.`
+      );
+    } else {
+      void vscode.window.showInformationMessage(summary);
+    }
+  }
+
+  async backupAll(): Promise<void> {
+    const folder = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: 'Export here',
+      title: 'Choose a folder for the export',
+    });
+    if (!folder?.[0]) {
+      return;
+    }
+
+    const now = new Date();
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const stamp =
+      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+      `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+
+    const root = vscode.Uri.joinPath(folder[0], `telegraph-backup_${stamp}`);
+    await vscode.workspace.fs.createDirectory(root);
+
+    const used = new Set<string>();
+    const unique = (base: string): string => {
+      let name = base;
+      let n = 2;
+      while (used.has(name)) {
+        name = `${base}-${n++}`;
+      }
+      used.add(name);
+      return name;
+    };
+
+    const write = async (dir: string, name: string, data: unknown) => {
+      const target = vscode.Uri.joinPath(root, dir, name);
+      await vscode.workspace.fs.writeFile(
+        target,
+        Buffer.from(JSON.stringify(data, null, 2), 'utf8')
+      );
+    };
+
+    const collections = await this.storage.listCollections();
+    const environments = await this.storage.listEnvironments();
+    const history = await this.storage.listHistory();
+
+    if (collections.length > 0) {
+      await vscode.workspace.fs.createDirectory(
+        vscode.Uri.joinPath(root, 'collections')
+      );
+    }
+    if (environments.length > 0) {
+      await vscode.workspace.fs.createDirectory(
+        vscode.Uri.joinPath(root, 'environments')
+      );
+    }
+
+    for (const collection of collections) {
+      const safe = unique(
+        collection.colName.replace(/[^\w.-]+/g, '-') || 'collection'
+      );
+      const related = await this.relatedEnvironments(collection);
+      await write(
+        'collections',
+        `${safe}.telegraph.json`,
+        toTelegraph(collection, related)
+      );
+    }
+
+    used.clear();
+    for (const environment of environments) {
+      const safe = unique(
+        environment.name.replace(/[^\w.-]+/g, '-') || 'environment'
+      );
+      await write('environments', `${safe}.json`, environment);
+    }
+
+    if (history.length > 0) {
+      const target = vscode.Uri.joinPath(root, 'activity.json');
+      await vscode.workspace.fs.writeFile(
+        target,
+        Buffer.from(
+          JSON.stringify(
+            {
+              telegraphVersion: '1.0',
+              exportedAt: new Date().toISOString(),
+              activity: history,
+            },
+            null,
+            2
+          ),
+          'utf8'
+        )
+      );
+    }
+
+    const total = collections.length + environments.length + history.length;
+    if (total === 0) {
+      vscode.window.showInformationMessage('Nothing to export yet.');
+      return;
+    }
+
+    const open = await vscode.window.showInformationMessage(
+      `Exported ${collections.length} collection${
+        collections.length === 1 ? '' : 's'
+      }, ${environments.length} environment${
+        environments.length === 1 ? '' : 's'
+      }, and ${history.length} activity entr${
+        history.length === 1 ? 'y' : 'ies'
+      }.`,
+      'Show Folder'
+    );
+    if (open) {
+      await vscode.commands.executeCommand('revealFileInOS', root);
+    }
   }
 
   async exportCollection(colId: string): Promise<void> {

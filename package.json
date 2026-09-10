@@ -2,7 +2,7 @@
   "name": "telegraph-rest-api-client",
   "displayName": "Telegraph REST API Client",
   "description": "Lightweight offline REST API client for VS Code. Test HTTP, REST and GraphQL APIs with collections, environments and .env support. A free, open-source Postman and Thunder Client alternative — no account, no cloud, no limits.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "publisher": "riturajshakti",
   "author": {
@@ -89,9 +89,26 @@
       },
       {
         "command": "telegraph.refresh",
-        "title": "Reload Data",
+        "title": "Reload Data From Disk",
         "category": "Telegraph",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "telegraph.backupAll",
+        "title": "Export All Data...",
+        "category": "Telegraph",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "telegraph.importAll",
+        "title": "Import All Data...",
+        "category": "Telegraph",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "telegraph.saveActive",
+        "title": "Save Request",
+        "category": "Telegraph"
       }
     ],
     "menus": {
@@ -109,6 +126,16 @@
         {
           "command": "telegraph.refresh",
           "group": "navigation@3",
+          "when": "view == telegraph.sidebar"
+        },
+        {
+          "command": "telegraph.backupAll",
+          "group": "navigation@4",
+          "when": "view == telegraph.sidebar"
+        },
+        {
+          "command": "telegraph.importAll",
+          "group": "navigation@5",
           "when": "view == telegraph.sidebar"
         }
       ]
@@ -130,9 +157,30 @@
         },
         "telegraph.responseLimit": {
           "type": "number",
-          "default": 2,
+          "default": 0,
+          "minimum": 0,
           "scope": "resource",
-          "markdownDescription": "Maximum response size to render, in MB."
+          "markdownDescription": "Maximum response size to render, in MB. Set to `0` for no limit."
+        },
+        "telegraph.binaryTextLimit": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "scope": "resource",
+          "markdownDescription": "Largest binary response, in MB, that may be shown as text. Above this only the download option is offered. Capped at 20 MB; `0` disables the text option entirely."
+        },
+        "telegraph.rawHexView": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Show binary bodies in the Raw tabs as a hex dump. Turn off to show the bytes decoded as text."
+        },
+        "telegraph.rawHexOffsets": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Include the offset column and ASCII gutter in the hex dump. Turn off for bare hex rows. Only applies while **Hex view** is on."
         },
         "telegraph.indentSize": {
           "type": "number",
@@ -151,6 +199,12 @@
         "command": "telegraph.newRequest",
         "key": "ctrl+alt+n",
         "mac": "cmd+alt+n"
+      },
+      {
+        "command": "telegraph.saveActive",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeWebviewPanelId == 'telegraph.requestView' || activeWebviewPanelId == 'telegraph.envView'"
       }
     ]
   },

@@ -19,6 +19,10 @@ export type WebviewToHost =
   | { type: 'dirty'; dirty: boolean }
   | { type: 'buildCurl'; request: ApiRequest }
   | { type: 'setFollowRedirects'; value: boolean }
+  | { type: 'setHexView'; hex: boolean; offsets: boolean }
+  | { type: 'downloadBody' }
+  | { type: 'revealFile'; path: string }
+  | { type: 'resendBinary'; mode: 'download' | 'text'; request: ApiRequest }
   | { type: 'newRequest' };
 
 export interface VarInfo {
@@ -37,7 +41,15 @@ export type HostToWebview =
   | { type: 'vars'; vars: Record<string, VarInfo> }
   | { type: 'curlParsed'; request: ApiRequest }
   | { type: 'curlText'; curl: string }
-  | { type: 'result'; result: SendResult; missing: string[]; sentUrl: string }
+  | {
+      type: 'result';
+      result: SendResult;
+      missing: string[];
+      sentUrl: string;
+      binaryTextLimit?: number;
+      rawHexView?: boolean;
+      rawHexOffsets?: boolean;
+    }
   | { type: 'sending'; hasUpload: boolean }
   | { type: 'uploadProgress'; sent: number; total: number }
   | {
@@ -48,6 +60,19 @@ export type HostToWebview =
       contentType: string;
     }
   | { type: 'streamChunk'; text: string; totalBytes: number }
+  | { type: 'saveRequested' }
+  | { type: 'binaryIncoming'; contentType: string; totalBytes: number }
+  | { type: 'downloadProgress'; received: number; total: number }
+  | {
+      type: 'downloadDone';
+      path: string;
+      bytes: number;
+      result: SendResult;
+      sentUrl: string;
+      binaryTextLimit?: number;
+      rawHexView?: boolean;
+      rawHexOffsets?: boolean;
+    }
   | {
       type: 'sentBody';
       info: {

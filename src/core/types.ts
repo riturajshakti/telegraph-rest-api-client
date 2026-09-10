@@ -144,6 +144,16 @@ export interface ApiResponse {
   status: number;
   statusText: string;
   headers: KeyValue[];
+  /** True when the payload is not meaningful as text and should be downloaded. */
+  binary?: boolean;
+  /** First 64 KB of the body, base64 encoded, for the Raw tab's hex views. */
+  headBase64?: string;
+  /** Truncation note appended after the hex dump, when the body was longer. */
+  headNote?: string;
+  /** Headers only: the binary body was deliberately not transferred. */
+  probed?: boolean;
+  /** Where the body was streamed, when it went straight to disk. */
+  savedTo?: string;
   body: string;
   bodyBytes: number;
   truncated: boolean;
@@ -159,7 +169,15 @@ export interface RequestError {
 }
 
 export type SendResult =
-  | { ok: true; response: ApiResponse }
+  | {
+      ok: true;
+      response: ApiResponse;
+      bytes?: Uint8Array;
+      /** Headers only: the binary body was deliberately not transferred. */
+      probed?: boolean;
+      /** Where the body was streamed, when it went straight to disk. */
+      savedTo?: string;
+    }
   | { ok: false; error: RequestError };
 
 export interface HistoryEntry {

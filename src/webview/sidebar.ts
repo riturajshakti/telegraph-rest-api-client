@@ -1016,6 +1016,17 @@ class EnvList {
         });
       });
 
+      const openBtn = el('button', {
+        class: 'tree-menu-btn env-open-btn',
+        type: 'button',
+        title: 'Open this environment',
+        'aria-label': `Open ${env.name}`,
+      }, ['↗']) as HTMLButtonElement;
+      openBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: 'openEnv', envId: env.id });
+      });
+
       const menuBtn = el('button', {
         class: 'tree-menu-btn',
         type: 'button',
@@ -1074,6 +1085,7 @@ class EnvList {
             ? el('span', { class: 'env-dotenv-chip', title: 'Linked to a .env file' }, ['.env'])
             : el('span'),
           el('span', { class: 'env-count' }, [String(env.varCount)]),
+          openBtn,
           menuBtn,
         ]
       );

@@ -33,6 +33,17 @@ export class EnvPanel {
     this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
   }
 
+  /** Tells the focused panel to save, for the Cmd/Ctrl+S keybinding. */
+  static saveActive(): boolean {
+    for (const panel of EnvPanel.panels.values()) {
+      if (panel.panel.active) {
+        panel.post({ type: 'saveRequested' });
+        return true;
+      }
+    }
+    return false;
+  }
+
   static init(workspace: Workspace, extensionUri: vscode.Uri): void {
     EnvPanel.workspace = workspace;
     EnvPanel.extensionUri = extensionUri;

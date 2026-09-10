@@ -191,6 +191,23 @@ export class KeyValueTable {
   ): void {
     row.draggable = true;
 
+    // Gate dragging on where the pointer already is, decided on hover rather
+    // than on mousedown: by the time a drag would begin the row is already in
+    // the right mode, so a click inside a field selects text instead.
+    for (const field of Array.from(
+      row.querySelectorAll<HTMLElement>('input, textarea')
+    )) {
+      if (field.getAttribute('type') === 'checkbox') {
+        continue;
+      }
+      field.addEventListener('mouseenter', () => {
+        row.draggable = false;
+      });
+      field.addEventListener('mouseleave', () => {
+        row.draggable = true;
+      });
+    }
+
     handle.tabIndex = 0;
     handle.setAttribute('role', 'button');
     handle.setAttribute('aria-label', 'Hold to reorder, or use arrow keys');

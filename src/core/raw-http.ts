@@ -94,7 +94,14 @@ export interface SentFileInfo {
   name: string;
   fileName: string;
   bytes: number;
+  /** A hex dump of the file, bounded to the first 64 KB. */
   preview?: string;
+  /** True when `preview` shows only the head of a larger file. */
+  previewTruncated?: boolean;
+  /** The same 64 KB head, base64 encoded, for switching hex formats. */
+  previewBase64?: string;
+  /** Truncation note appended after the dump, when the file was longer. */
+  previewNote?: string;
 }
 
 export interface SentBodyInfo {
@@ -211,7 +218,7 @@ export function toRawHttp(request: ApiRequest, sent?: SentBodyInfo): string {
             parts.push(info.preview);
           } else if (info) {
             parts.push(
-              `<${info.bytes.toLocaleString()} bytes — ${formatBytes(info.bytes)}. ` +
+              `<${info.bytes.toLocaleString('en-US')} bytes — ${formatBytes(info.bytes)}. ` +
                 `Use "Load full bytes" above to display them.>`
             );
           } else {
@@ -233,7 +240,7 @@ export function toRawHttp(request: ApiRequest, sent?: SentBodyInfo): string {
         payload = info.preview;
       } else if (info) {
         payload =
-          `<${info.bytes.toLocaleString()} bytes — ${formatBytes(info.bytes)}. ` +
+          `<${info.bytes.toLocaleString('en-US')} bytes — ${formatBytes(info.bytes)}. ` +
           `Use "Load full bytes" above to display them.>`;
       } else {
         payload = `@${body.binaryPath}`;
@@ -273,6 +280,40 @@ function impliedContentType(request: ApiRequest): string | null {
  * Parses an HTTP message back into request fields. Returns every problem it
  * finds so nothing is applied from a partially valid edit.
  */
+/**
+ * Renders a response the way it arrived on the wire: status line, headers, then
+ * the body. Mirrors `toRawHttp` for requests.
+ */
+export function toRawHttpResponse(response: {
+  status: number;
+  statusText: string;
+  headers: KeyValue[];
+  body: string;
+  bodyBytes: number;
+  truncated: boolean;
+}): string {
+  const lines: string[] = [
+    `HTTP/1.1 ${response.status} ${response.statusText}`.trim(),
+  ];
+
+  for (const header of response.headers) {
+    lines.push(`${header.name}: ${header.value}`);
+  }
+
+  const head = lines.join('\n');
+
+  if (!response.body) {
+    return head;
+  }
+
+  const note = response.truncated
+    ? `\n\n<truncated — showing ${response.body.length.toLocaleString('en-US')} of ` +
+      `${response.bodyBytes.toLocaleString('en-US')} bytes>`
+    : '';
+
+  return `${head}\n\n${response.body}${note}`;
+}
+
 export function fromRawHttp(source: string): RawParseResult {
   const errors: string[] = [];
   const text = source.replace(/\r\n/g, '\n');

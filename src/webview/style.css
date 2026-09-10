@@ -373,6 +373,13 @@ body.sidebar {
   padding: 12px 10px;
 }
 
+/* Breathing room under the last row so it is not pinned to the bottom edge. */
+#pane-collections,
+#pane-env,
+#pane-hist {
+  padding-bottom: 180px;
+}
+
 .sidebar-actions {
   margin-bottom: 14px;
 }
@@ -1149,9 +1156,16 @@ body.sidebar {
 .env-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin-bottom: 6px;
+}
+
+.env-header-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .env-title {
@@ -1298,10 +1312,72 @@ body.sidebar {
   border: none;
 }
 
+/* Custom scrollbar: the textarea is invisible so it paints none of its own,
+   and the highlight layer cannot be raised above the textarea without
+   swallowing caret clicks. This bar sits beside the text instead. */
+
+.code-scroll-track {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
+  z-index: 3;
+  border-radius: 5px;
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.code-editor:hover .code-scroll-track,
+.code-editor:focus-within .code-scroll-track,
+.code-scroll-track.dragging {
+  opacity: 1;
+}
+
+.code-scroll-track.hidden {
+  display: none;
+}
+
+.code-scroll-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  border-radius: 5px;
+  background-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+  cursor: default;
+}
+
+.code-scroll-thumb:hover {
+  background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+.code-scroll-track.dragging .code-scroll-thumb {
+  background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
+}
+
+/* No native scrollbars: one is invisible, the other would sit under the
+   custom bar as a dead strip. */
+.code-layer::-webkit-scrollbar,
+.code-input::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.code-layer,
+.code-input {
+  scrollbar-width: none;
+}
+
 .code-layer {
   position: absolute;
   inset: 0;
   z-index: 0;
+  /* The textarea above is `opacity: 0`, which paints nothing at all — its own
+     scrollbar included. So this layer draws the only visible scrollbar, and it
+     must accept the mouse for click-and-drag to work. Text clicks still reach
+     the textarea because the content itself ignores pointer events. */
   overflow: auto;
   pointer-events: none;
   color: var(--vscode-input-foreground);
@@ -1310,6 +1386,8 @@ body.sidebar {
 .caret-mark {
   display: inline-block;
   width: 0;
+  height: 1.15em;
+  vertical-align: text-bottom;
   border-left: 1px solid var(--vscode-editorCursor-foreground, var(--vscode-foreground));
   margin-left: -1px;
   animation: caret-blink 1.06s steps(1) infinite;
@@ -1335,6 +1413,7 @@ body.sidebar {
   white-space: inherit;
   word-break: inherit;
 }
+
 
 .code-input {
   position: relative;
@@ -2031,17 +2110,6 @@ input.var-input-field::placeholder {
   font-variant-numeric: tabular-nums;
 }
 
-.env-warning {
-  margin: 0 0 16px;
-  padding: 8px 12px;
-  border-radius: 3px;
-  border-left: 3px solid var(--vscode-editorWarning-foreground, #ff9800);
-  background-color: rgba(255, 152, 0, 0.12);
-  font-size: 0.88em;
-  line-height: 1.5;
-  max-width: 620px;
-}
-
 .name-row .icon-btn {
   font-size: 14px;
 }
@@ -2579,4 +2647,122 @@ body.vscode-light .find-match {
     background-color: transparent;
     color: inherit;
   }
+}
+
+/* Per-environment open button */
+
+.env-open-btn {
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+/* Dotfile hint popup */
+
+.dotfile-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dotfile-info {
+  font-size: 1.05em;
+  opacity: 0.75;
+}
+
+.dotfile-info:hover {
+  opacity: 1;
+}
+
+.dotfile-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  width: 320px;
+  padding: 9px 11px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  line-height: 1.5;
+  background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.35)));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.dotfile-popup.hidden {
+  display: none;
+}
+
+/* Binary response: download or inspect */
+
+.binary-choice {
+  padding: 6px 0;
+}
+
+.binary-note {
+  max-width: 560px;
+  padding: 16px 18px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  background-color: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.08));
+}
+
+.binary-note strong {
+  font-size: 1.02em;
+}
+
+.binary-note p {
+  margin: 8px 0 14px;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.binary-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Key/value fields: a draggable row must not swallow text selection inside
+   its inputs. Covers query, headers, cookies, form, form-encode, and
+   environment tables, which all render through VarInput. */
+
+.kv-row .var-input-field,
+.kv-row .kv-input,
+.kv-row input,
+.kv-row textarea {
+  -webkit-user-drag: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.binary-limit-note {
+  margin: 10px 0 0;
+  font-size: 0.9em;
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+.saved-path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+/* Hex view switches in the Raw toolbars */
+
+.hex-switches {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.hex-switch {
+  font-size: 0.88em;
+}
+
+.hex-switch.disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }

@@ -18,6 +18,8 @@ export class CodeEditor {
   private readonly pre: HTMLPreElement;
   private readonly code: HTMLElement;
   private readonly gutter: HTMLElement;
+  private readonly scrollTrack: HTMLElement;
+  private readonly scrollThumb: HTMLElement;
   private language: Language = 'text';
   private regions: FoldRegion[] = [];
   private readonly collapsed = new Set<number>();
@@ -47,11 +49,24 @@ export class CodeEditor {
 
     this.gutter = el('div', { class: 'code-gutter', 'aria-hidden': 'true' });
 
+    // The textarea is `opacity: 0`, so it paints no scrollbar of its own, and
+    // the highlight layer cannot be raised above it without swallowing caret
+    // clicks. A separate bar sits outside the text flow instead: it takes the
+    // mouse without ever covering the text.
+    this.scrollThumb = el('div', { class: 'code-scroll-thumb' });
+    this.scrollTrack = el('div', {
+      class: 'code-scroll-track',
+      'aria-hidden': 'true',
+    }, [this.scrollThumb]);
+
     this.element = el('div', { class: 'code-editor' }, [
       this.gutter,
       this.pre,
       this.textarea,
+      this.scrollTrack,
     ]) as HTMLDivElement;
+
+    this.wireScrollbar();
 
     this.textarea.addEventListener('input', () => {
       this.repaint();
@@ -122,10 +137,6 @@ export class CodeEditor {
       }
     });
 
-    this.textarea.addEventListener('blur', () => {
-      const end = this.textarea.selectionEnd;
-      this.textarea.setSelectionRange(end, end);
-    });
   }
 
   /**
@@ -785,12 +796,207 @@ export class CodeEditor {
     }
   }
 
+  /** Drag and track-click on the custom scrollbar, driving the textarea. */
+  private wireScrollbar(): void {
+    let dragging = false;
+    let startY = 0;
+    let startScroll = 0;
+
+    const ratio = (): number => {
+      const scrollable = this.textarea.scrollHeight - this.textarea.clientHeight;
+      return scrollable > 0 ? scrollable : 0;
+    };
+
+    this.scrollThumb.addEventListener('pointerdown', (event: PointerEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dragging = true;
+      startY = event.clientY;
+      startScroll = this.textarea.scrollTop;
+      this.scrollThumb.setPointerCapture(event.pointerId);
+      this.scrollTrack.classList.add('dragging');
+    });
+
+    this.scrollThumb.addEventListener('pointermove', (event: PointerEvent) => {
+      if (!dragging) {
+        return;
+      }
+      const trackHeight = this.scrollTrack.clientHeight;
+      const thumbHeight = this.scrollThumb.offsetHeight;
+      const travel = trackHeight - thumbHeight;
+      if (travel <= 0) {
+        return;
+      }
+      const delta = event.clientY - startY;
+      this.textarea.scrollTop = startScroll + (delta / travel) * ratio();
+      this.syncScroll();
+    });
+
+    const stop = (event: PointerEvent): void => {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      this.scrollThumb.releasePointerCapture(event.pointerId);
+      this.scrollTrack.classList.remove('dragging');
+    };
+    this.scrollThumb.addEventListener('pointerup', stop);
+    this.scrollThumb.addEventListener('pointercancel', stop);
+
+    // Clicking the track jumps a page in that direction.
+    this.scrollTrack.addEventListener('pointerdown', (event: PointerEvent) => {
+      if (event.target === this.scrollThumb) {
+        return;
+      }
+      const rect = this.scrollTrack.getBoundingClientRect();
+      const above = event.clientY < this.scrollThumb.getBoundingClientRect().top;
+      const page = this.textarea.clientHeight;
+      this.textarea.scrollTop += above ? -page : page;
+      void rect;
+      this.syncScroll();
+    });
+  }
+
+  /** Sizes and positions the thumb from the textarea's scroll state. */
+  private syncScrollbar(): void {
+    const contentHeight = this.textarea.scrollHeight;
+    const viewHeight = this.textarea.clientHeight;
+
+    if (contentHeight <= viewHeight + 1) {
+      this.scrollTrack.classList.add('hidden');
+      return;
+    }
+    this.scrollTrack.classList.remove('hidden');
+
+    const trackHeight = this.scrollTrack.clientHeight;
+    const MIN_THUMB = 24;
+    const thumbHeight = Math.max(
+      MIN_THUMB,
+      Math.round((viewHeight / contentHeight) * trackHeight)
+    );
+    const travel = trackHeight - thumbHeight;
+    const scrollable = contentHeight - viewHeight;
+    const offset =
+      scrollable > 0
+        ? Math.round((this.textarea.scrollTop / scrollable) * travel)
+        : 0;
+
+    this.scrollThumb.style.height = `${thumbHeight}px`;
+    this.scrollThumb.style.transform = `translateY(${offset}px)`;
+  }
+
   private syncScroll(): void {
+    this.syncScrollbar();
     this.pre.scrollTop = this.textarea.scrollTop;
     this.pre.scrollLeft = this.textarea.scrollLeft;
     // Arrow tops are absolute positions within the content, so the gutter is
     // scrolled rather than transformed — transforming would shift them twice.
     this.gutter.scrollTop = this.textarea.scrollTop;
+  }
+
+  /**
+   * Word and line deletion, matching VS Code's bindings per platform:
+   * Alt/Ctrl+Backspace deletes a word, Cmd+Backspace deletes to the line start
+   * (macOS only, where Cmd is the line modifier).
+   */
+  private handleWordOrLineDelete(event: KeyboardEvent): boolean {
+    const area = this.textarea;
+    const { selectionStart, selectionEnd, value } = area;
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const forward = event.key === 'Delete';
+
+    const wordModifier = isMac ? event.altKey : event.ctrlKey;
+    const lineModifier = isMac && event.metaKey;
+
+    if (!wordModifier && !lineModifier) {
+      return false;
+    }
+
+    // With a selection, every variant just removes it.
+    if (selectionStart !== selectionEnd) {
+      event.preventDefault();
+      area.value = value.slice(0, selectionStart) + value.slice(selectionEnd);
+      area.setSelectionRange(selectionStart, selectionStart);
+      this.repaint();
+      this.onInput();
+      return true;
+    }
+
+    let from = selectionStart;
+    let to = selectionStart;
+
+    if (lineModifier) {
+      if (forward) {
+        const nl = value.indexOf('\n', selectionStart);
+        to = nl === -1 ? value.length : nl;
+      } else {
+        from = value.lastIndexOf('\n', selectionStart - 1) + 1;
+      }
+    } else if (forward) {
+      to = CodeEditor.wordBoundary(value, selectionStart, 1);
+    } else {
+      from = CodeEditor.wordBoundary(value, selectionStart, -1);
+    }
+
+    if (from === to) {
+      return false;
+    }
+
+    event.preventDefault();
+    area.value = value.slice(0, from) + value.slice(to);
+    area.setSelectionRange(from, from);
+    this.repaint();
+    this.onInput();
+    return true;
+  }
+
+  /**
+   * Finds the next word edge, skipping trailing whitespace first so deleting
+   * after a space removes the space and the word together, as VS Code does.
+   */
+  private static wordBoundary(
+    value: string,
+    from: number,
+    direction: 1 | -1
+  ): number {
+    const isWord = (c: string): boolean => /[\w$]/.test(c);
+    let i = from;
+
+    if (direction === -1) {
+      while (i > 0 && /\s/.test(value[i - 1]) && value[i - 1] !== '\n') {
+        i--;
+      }
+      if (i > 0 && value[i - 1] === '\n') {
+        return i - 1;
+      }
+      if (i > 0 && isWord(value[i - 1])) {
+        while (i > 0 && isWord(value[i - 1])) {
+          i--;
+        }
+      } else {
+        while (i > 0 && !isWord(value[i - 1]) && !/\s/.test(value[i - 1])) {
+          i--;
+        }
+      }
+      return i;
+    }
+
+    while (i < value.length && /\s/.test(value[i]) && value[i] !== '\n') {
+      i++;
+    }
+    if (i < value.length && value[i] === '\n') {
+      return i + 1;
+    }
+    if (i < value.length && isWord(value[i])) {
+      while (i < value.length && isWord(value[i])) {
+        i++;
+      }
+    } else {
+      while (i < value.length && !isWord(value[i]) && !/\s/.test(value[i])) {
+        i++;
+      }
+    }
+    return i;
   }
 
   private replaceSelection(text: string, selectionOffset: number): void {
@@ -989,6 +1195,12 @@ export class CodeEditor {
 
     // Cmd/Ctrl+Enter is the send shortcut; let it bubble without inserting
     // a newline or auto-indenting.
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      if (this.handleWordOrLineDelete(event)) {
+        return;
+      }
+    }
+
     if (event.key === 'Backspace') {
       const { selectionStart, selectionEnd, value } = area;
       if (selectionStart === selectionEnd && selectionStart > 0) {
