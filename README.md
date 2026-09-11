@@ -28,7 +28,7 @@ code --install-extension riturajshakti.telegraph-rest-api-client
 
 - **Genuinely free** — no paid plans, no request limits, no locked features
 - **Fully offline** — no telemetry, no cloud sync, no account required
-- **Tiny** — a ~79 KB download with **zero runtime dependencies**
+- **Tiny** — a ~97 KB download with **zero runtime dependencies**
 - **Native feel** — follows your VS Code theme, light or dark
 - **Your data is yours** — collections are plain, readable JSON you can commit to git
 
@@ -46,6 +46,8 @@ code --install-extension riturajshakti.telegraph-rest-api-client
 - Syntax highlighting for JSON, XML, and GraphQL, with familiar editor shortcuts
 - Paste a JavaScript object and it converts to JSON automatically
 - `//` comments allowed in JSON bodies, stripped before sending
+- Invalid JSON, XML, GraphQL, and GraphQL variables are flagged above the
+  editor with the line and column, and clicking it jumps to the character
 
 ![Sending a request](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/api-request.png)
 
@@ -93,6 +95,34 @@ count and byte total, and **Cancel request** stops an endless stream at any time
 
 ![Streaming SSE](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/sse.png)
 
+### WebSockets and Socket.IO
+
+Send a request that is answered with `101 Switching Protocols` and the
+connection stays open. A **Socket** tab appears in the request section to
+compose messages and another in the response section with a live log of
+everything sent and received, timestamped and sized. **Close socket** ends it
+with a proper close frame.
+
+Type a `ws://` or `wss://` URL directly, or paste a cURL command carrying the
+upgrade headers.
+
+![WebSocket session](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/web-socket.png)
+
+Socket.IO is recognised automatically: Telegraph answers the Engine.IO
+heartbeat and joins the default namespace for you, so the connection stays
+alive. An **Event** field turns a name and a JSON payload into the right frame,
+and leaving it empty sends raw frames for namespaces, acks, and auth.
+
+![Socket.IO session](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/socket-io.png)
+
+### Binary responses
+
+An image, video, PDF, archive, or font is recognised from its content type and
+the transfer stops at the headers, so nothing large is pulled down before you
+choose. Download it byte-exact straight to disk with live progress, or render
+the bytes as text to inspect them. Headers, cookies, redirects, and the Raw tab
+stay available throughout.
+
 ### Redirects
 
 Turn on **Follow Redirects** and every hop is listed with its status, method,
@@ -107,6 +137,11 @@ The **Raw** tab shows the exact bytes Telegraph will put on the wire — the rea
 multipart boundary, the computed `Content-Length`, and a hex dump of binary
 parts. Edit it and choose **Apply to request** to push changes back into the
 other tabs.
+
+Two switches control how bytes are shown, in both the request and response Raw
+tabs: **Hex view** for a hex dump instead of decoded text, and **Offsets &
+ASCII** for the offset column and the `|....ftypmp42....|` gutter. Uploads and
+binary responses both preview their first 64 KB.
 
 ![Raw request bytes](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/raw-form-data.png)
 
@@ -147,6 +182,10 @@ A collection can use no environment, embed its own, or link shared ones:
 
 ![Export format](https://raw.githubusercontent.com/riturajshakti/telegraph-rest-api-client/main/images/export-collection.png)
 
+**Export all** writes every collection, environment, and the activity list into
+one timestamped folder, and **Import all** restores that folder in one go — both
+from the sidebar title bar. Several files can also be imported at once.
+
 Migrating from Postman? Export your collection and import the file directly —
 folder structure, headers, auth, and bodies are all preserved.
 
@@ -170,7 +209,7 @@ Ad-hoc requests are tracked automatically with status and timing. Re-running a r
 | Runs inside VS Code | Yes | Yes | Separate app |
 | Collections in git | Plain JSON | Proprietary | Cloud-synced |
 | Open source | MIT | No | No |
-| Download size | ~79 KB | ~10 MB | ~200 MB app |
+| Download size | ~97 KB | ~10 MB | ~200 MB app |
 
 Telegraph deliberately does **not** try to match Postman feature for feature.
 There is no test scripting, no request chaining, and no team sync — if you need
@@ -208,7 +247,10 @@ Paste a cURL command into the URL bar and Telegraph fills in the method, headers
 |---|---|---|
 | `telegraph.requestTimeout` | `0` | Request timeout in milliseconds. `0` means no timeout |
 | `telegraph.followRedirects` | `true` | Follow HTTP redirects (up to 1000 hops) |
-| `telegraph.responseLimit` | `2` | Maximum response size to render, in MB |
+| `telegraph.responseLimit` | `0` | Maximum response size to render, in MB. `0` means no limit |
+| `telegraph.binaryTextLimit` | `2` | Largest binary response that may be shown as text, in MB (max 20) |
+| `telegraph.rawHexView` | `true` | Show bytes in the Raw tabs as a hex dump |
+| `telegraph.rawHexOffsets` | `true` | Include the offset column and ASCII gutter in the hex dump |
 | `telegraph.indentSize` | `2` | Indentation used when formatting JSON |
 
 ---

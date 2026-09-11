@@ -27,7 +27,6 @@ media/icon.svg
 
 # Release and OS clutter
 release-steps.md
-notes-0.2.0.md
 **/.DS_Store
 Thumbs.db
 *.vsix

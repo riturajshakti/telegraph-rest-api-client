@@ -153,8 +153,9 @@ publish old code.
 cd server && npm test && cd ..
 ```
 
-Expect **95/95 passed**. The server is dev-only and never ships, but the tests
-exercise the request engine end to end.
+Expect **120/120 passed**. The server is dev-only and never ships, but the
+tests exercise the request engine end to end, including the WebSocket and
+Socket.IO endpoints.
 
 ### 3. Update the version
 
@@ -216,7 +217,7 @@ Then build the file and check its size:
 npx @vscode/vsce package --no-dependencies
 ```
 
-Should be roughly **75 KB**. A sudden jump means something got included that
+Should be roughly **97 KB**. A sudden jump means something got included that
 should not have been.
 
 ### 6. Commit, tag, and push
