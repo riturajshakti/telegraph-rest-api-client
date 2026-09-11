@@ -1412,6 +1412,10 @@ body.sidebar {
   font: inherit;
   white-space: inherit;
   word-break: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
 }
 
 
@@ -2858,14 +2862,19 @@ body.vscode-light .find-match {
   border-color: currentColor;
 }
 
+.tab-btn.socket-live {
+  position: relative;
+}
+
 .tab-btn.socket-live::after {
   content: '';
-  display: inline-block;
+  position: absolute;
+  top: 50%;
+  right: 2px;
   width: 6px;
   height: 6px;
-  margin-left: 6px;
+  margin-top: -3px;
   border-radius: 50%;
-  vertical-align: middle;
   background-color: var(--vscode-testing-iconPassed, #388e3c);
 }
 
