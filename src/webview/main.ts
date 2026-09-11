@@ -13,6 +13,8 @@ import { parseSetCookie, type Cookie } from '../core/cookies';
 import { FoldedView } from './components/folded-view';
 import { FindBar } from './components/find-bar';
 import { renderHead } from './components/hex-view';
+import { IssueBanner, validateXml } from './components/body-issues';
+import { validateGraphql, validateJson } from '../core/validate';
 import { HTTP_METHODS } from '../core/types';
 import type {
   ApiRequest,
@@ -69,6 +71,12 @@ const LANGUAGE_FOR: Partial<Record<BodyType, Language>> = {
   text: 'text',
 };
 
+const ISSUE_LABEL: Partial<Record<BodyType, string>> = {
+  json: 'JSON',
+  xml: 'XML',
+  graphql: 'GraphQL query',
+};
+
 const AUTH_TYPES: { value: AuthType; label: string }[] = [
   { value: 'none', label: 'None' },
   { value: 'basic', label: 'Basic' },
@@ -104,6 +112,9 @@ class RequestView {
   private bodyBinaryWrap!: HTMLDivElement;
   private binaryPathLabel!: HTMLSpanElement;
   private formatBtn!: HTMLButtonElement;
+  private bodyIssue!: IssueBanner;
+  private varsIssue!: IssueBanner;
+  private bodyCheckTimer = 0;
 
   private authTypeTabs!: Segmented<AuthType>;
   private authFields!: HTMLDivElement;
@@ -516,13 +527,22 @@ class RequestView {
     this.bodyEditor = new CodeEditor('{\n  "key": "value"\n}', () => {
       this.request.body.raw = this.bodyEditor.getValue();
       this.markDirty();
+      this.scheduleBodyCheck();
     });
 
     this.gqlVarsEditor = new CodeEditor('{\n  "id": "123"\n}', () => {
       this.request.body.graphqlVariables = this.gqlVarsEditor.getValue();
       this.markDirty();
+      this.scheduleBodyCheck();
     });
     this.gqlVarsEditor.setLanguage('json');
+
+    this.bodyIssue = new IssueBanner((offset) =>
+      this.bodyEditor.revealOffset(offset)
+    );
+    this.varsIssue = new IssueBanner((offset) =>
+      this.gqlVarsEditor.revealOffset(offset)
+    );
 
     this.formatBtn = el(
       'button',
@@ -561,10 +581,12 @@ class RequestView {
       this.gqlVarsEditor.setValue(formatted);
       this.request.body.graphqlVariables = formatted;
       this.markDirty();
+      this.checkBody();
     });
 
     this.gqlVarsWrap = el('div', { class: 'gql-vars' }, [
       el('div', { class: 'gql-vars-label' }, ['Variables']),
+      this.varsIssue.element,
       el('div', { class: 'gql-vars-editor' }, [
         gqlFormatBtn,
         this.gqlVarsEditor.element,
@@ -628,6 +650,7 @@ class RequestView {
 
     return el('div', { class: 'body-panel' }, [
       el('div', { class: 'body-toolbar' }, [this.bodyTypeTabs.element]),
+      this.bodyIssue.element,
       this.bodyRawWrap,
       this.gqlVarsWrap,
       this.bodyFormWrap,
@@ -662,6 +685,7 @@ class RequestView {
     this.bodyEditor.setValue(formatted);
     this.request.body.raw = formatted;
     this.markDirty();
+    this.checkBody();
   }
 
   private stashBodyDraft(): void {
@@ -730,6 +754,40 @@ class RequestView {
         : type === 'json'
         ? 'Paste JSON or a JS object — it is converted automatically.'
         : 'Request body'
+    );
+    this.checkBody();
+  }
+
+  private scheduleBodyCheck(): void {
+    window.clearTimeout(this.bodyCheckTimer);
+    if (this.bodyIssue.visible || this.varsIssue.visible) {
+      this.checkBody();
+      return;
+    }
+    this.bodyCheckTimer = window.setTimeout(() => this.checkBody(), 300);
+  }
+
+  private checkBody(): void {
+    window.clearTimeout(this.bodyCheckTimer);
+    if (!this.request) {
+      return;
+    }
+    const type = this.request.body.type;
+    const source = this.bodyEditor.getValue();
+    const issue =
+      type === 'json'
+        ? validateJson(source)
+        : type === 'xml'
+        ? validateXml(source)
+        : type === 'graphql'
+        ? validateGraphql(source)
+        : null;
+    this.bodyIssue.show(issue, ISSUE_LABEL[type] ?? '');
+    this.varsIssue.show(
+      type === 'graphql'
+        ? validateJson(this.gqlVarsEditor.getValue(), { objectOnly: true })
+        : null,
+      'GraphQL variables'
     );
   }
 

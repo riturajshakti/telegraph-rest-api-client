@@ -906,6 +906,55 @@ body.sidebar {
   background-color: var(--vscode-editor-background);
 }
 
+.body-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  border-left: 3px solid var(--vscode-errorForeground, #f14c4c);
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(244, 67, 54, 0.1));
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.body-issue-icon {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--vscode-editor-background, #1e1e1e);
+  background-color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.body-issue-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.body-issue-where {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.body-issue-where:hover {
+  text-decoration: underline;
+}
+
 /* Body: binary file picker */
 
 .binary-row {

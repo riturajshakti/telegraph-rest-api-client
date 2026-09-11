@@ -449,6 +449,23 @@ export class CodeEditor {
     this.textarea.focus();
   }
 
+  revealOffset(offset: number): void {
+    const area = this.textarea;
+    const start = Math.max(0, Math.min(offset, area.value.length));
+    const end = Math.min(start + 1, area.value.length);
+    area.focus();
+    area.setSelectionRange(start, end);
+    this.repaintSelectionOnly();
+
+    const mark = this.code.querySelector<HTMLElement>('.sel-band, .caret-mark');
+    if (!mark) {
+      return;
+    }
+    area.scrollTop = Math.max(0, mark.offsetTop - area.clientHeight / 3);
+    this.syncScroll();
+    mark.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
   /**
    * Grows the editor to fit its content so fold arrows are reachable without
    * scrolling inside a small box, up to a cap that keeps the pane usable.
