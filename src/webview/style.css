@@ -2766,3 +2766,186 @@ body.vscode-light .find-match {
   opacity: 0.4;
   pointer-events: none;
 }
+
+.socket-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.socket-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+}
+
+.socket-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.92em;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.socket-status::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--vscode-descriptionForeground);
+}
+
+.socket-status.open {
+  opacity: 1;
+}
+
+.socket-status.open::before {
+  background-color: var(--vscode-testing-iconPassed, #388e3c);
+  box-shadow: 0 0 0 3px rgba(56, 142, 60, 0.25);
+}
+
+.socket-status.connecting::before {
+  background-color: var(--tg-accent);
+}
+
+.socket-event-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.socket-event-row .field-label {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.socket-event-input {
+  flex: 0 1 280px;
+  min-width: 160px;
+}
+
+.socket-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.socket-hint {
+  font-size: 0.85em;
+  opacity: 0.6;
+}
+
+.socket-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.85em;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  opacity: 0.75;
+}
+
+.socket-badge.open {
+  opacity: 1;
+  color: var(--vscode-testing-iconPassed, #388e3c);
+  border-color: currentColor;
+}
+
+.tab-btn.socket-live::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background-color: var(--vscode-testing-iconPassed, #388e3c);
+}
+
+.socket-log {
+  max-height: 520px;
+  overflow: auto;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  background-color: var(--vscode-editor-background);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: 1.5;
+}
+
+.socket-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.16));
+}
+
+.socket-row:last-child {
+  border-bottom: none;
+}
+
+.socket-arrow {
+  flex: none;
+  width: 1em;
+  font-weight: 700;
+  text-align: center;
+}
+
+.socket-in .socket-arrow {
+  color: var(--vscode-testing-iconPassed, #388e3c);
+}
+
+.socket-out .socket-arrow {
+  color: var(--tg-accent);
+}
+
+.socket-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.socket-meta {
+  font-family: var(--vscode-font-family);
+  font-size: 0.8em;
+  opacity: 0.6;
+}
+
+.socket-time {
+  margin-right: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.socket-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.socket-quiet {
+  opacity: 0.5;
+}
+
+.socket-close .socket-text {
+  color: var(--vscode-editorWarning-foreground, #ff9800);
+}
+
+.socket-notice {
+  align-items: baseline;
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  background-color: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.07));
+}
+
+.socket-notice .socket-arrow {
+  opacity: 0.5;
+}
+
+.socket-notice.error {
+  color: var(--vscode-errorForeground, #f44336);
+}

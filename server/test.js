@@ -32,6 +32,75 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function until(predicate, ms = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (predicate()) return true;
+    await delay(15);
+  }
+  return false;
+}
+
+function openSocket(path, { answerPings = false } = {}) {
+  const WebSocket = require('ws');
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://localhost:${PORT}${path}`);
+    const text = [];
+    const binary = [];
+    let settleClose;
+    const closed = new Promise((r) => (settleClose = r));
+
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) {
+        binary.push(data);
+        return;
+      }
+      const value = data.toString('utf8');
+      text.push(value);
+      if (answerPings && value === '2') {
+        ws.send('3');
+      }
+    });
+    ws.on('close', (code, reason) => settleClose({ code, reason: reason.toString() }));
+    ws.once('open', () =>
+      resolve({
+        ws,
+        text,
+        binary,
+        closed,
+        json: () =>
+          text
+            .map((t) => {
+              try {
+                return JSON.parse(t);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean),
+      })
+    );
+    ws.once('unexpected-response', (_req, res) => {
+      resolve({ ws: null, status: res.statusCode, text, binary, closed, json: () => [] });
+      res.resume();
+    });
+    ws.once('error', reject);
+  });
+}
+
+function rawGet(path) {
+  return new Promise((resolve, reject) => {
+    http
+      .get({ host: 'localhost', port: PORT, path }, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      })
+      .on('error', reject);
+  });
+}
+
 /**
  * Reads an endless stream until `want` ticks arrive, then hangs up and reports
  * whether the server kept writing afterwards.
@@ -221,7 +290,9 @@ function multipart(fields, files) {
 }
 
 async function run() {
-  const server = app.listen(PORT);
+  const server = http.createServer(app);
+  app.attachSockets(server, { pingInterval: 300, pingTimeout: 400 });
+  server.listen(PORT);
   await new Promise((r) => server.once('listening', r));
 
   let res;
@@ -597,6 +668,99 @@ async function run() {
   res = await request({ method: 'GET', path: '/no/such/route' });
   check('Unknown route is 404', res.status, 404);
   check('404 is JSON', res.json.ok, false);
+
+  console.log('\nNative WebSocket');
+
+  let a = await openSocket('/ws');
+  await until(() => a.json().some((m) => m.type === 'welcome'));
+  const welcome = a.json().find((m) => m.type === 'welcome');
+  check('WS welcome message', welcome.message, 'Connected to the Telegraph WebSocket echo server');
+  check('WS welcome echoes handshake headers', welcome.handshake.headers.upgrade, 'websocket');
+
+  a.ws.send('hello');
+  await until(() => a.json().some((m) => m.type === 'echo' && m.data === 'hello'));
+  check('WS echoes text', a.json().some((m) => m.type === 'echo' && m.data === 'hello'), true);
+
+  a.ws.send('{"x":1}');
+  await until(() => a.json().some((m) => m.type === 'echo' && m.data && m.data.x === 1));
+  check('WS echoes JSON parsed', a.json().some((m) => m.type === 'echo' && m.data && m.data.x === 1), true);
+
+  a.ws.send(Buffer.from([1, 2, 3]));
+  await until(() => a.binary.length > 0);
+  check('WS echoes binary byte for byte', [...(a.binary[0] ?? [])], [1, 2, 3]);
+
+  a.ws.send('{"action":"binary","bytes":16}');
+  await until(() => a.binary.length > 1);
+  check('WS binary action pattern', [...(a.binary[1] ?? [])].slice(0, 4), [0, 1, 2, 3]);
+  check('WS binary action size', (a.binary[1] ?? []).length, 16);
+
+  a.ws.send('{"action":"burst","count":3}');
+  await until(() => a.json().filter((m) => m.type === 'burst').length === 3);
+  check('WS burst', a.json().filter((m) => m.type === 'burst').map((m) => m.seq), [1, 2, 3]);
+
+  a.ws.send('{"action":"ping"}');
+  await until(() => a.json().some((m) => m.type === 'pong'));
+  check('WS server ping answered', a.json().find((m) => m.type === 'pong')?.payload, 'telegraph');
+
+  const b = await openSocket('/ws');
+  a.ws.send('{"action":"broadcast","data":"hi all"}');
+  await until(() => b.json().some((m) => m.type === 'broadcast'));
+  check('WS broadcast reaches other clients', b.json().find((m) => m.type === 'broadcast')?.data, 'hi all');
+  b.ws.close();
+
+  a.ws.send('{"action":"close","code":4001,"reason":"bye"}');
+  const closed = await a.closed;
+  check('WS close action', closed, { code: 4001, reason: 'bye' });
+
+  const ticks = await openSocket('/ws?interval=50');
+  await until(() => ticks.json().filter((m) => m.type === 'tick').length >= 3);
+  check('WS interval ticks', ticks.json().filter((m) => m.type === 'tick').length >= 3, true);
+  ticks.ws.close();
+
+  const missing = await openSocket('/nope');
+  check('WS unknown path is 404', missing.status, 404);
+
+  res = await request({ method: 'GET', path: '/ws' });
+  check('GET /ws without upgrade is 426', res.status, 426);
+
+  console.log('\nSocket.IO');
+
+  const io = await openSocket('/socket.io/?EIO=4&transport=websocket', { answerPings: true });
+  await until(() => io.text.length > 0);
+  check('IO open packet first', io.text[0][0], '0');
+  check('IO ping interval passed through', JSON.parse(io.text[0].slice(1)).pingInterval, 300);
+
+  io.ws.send('40');
+  await until(() => io.text.some((t) => t.startsWith('42["welcome"')));
+  check('IO connect acknowledged', io.text.some((t) => t.startsWith('40{')), true);
+  check('IO welcome event', io.text.some((t) => t.startsWith('42["welcome"')), true);
+
+  io.ws.send('42["message",{"x":1}]');
+  await until(() => io.text.some((t) => t.startsWith('42["echo"')));
+  const echoed = JSON.parse(io.text.find((t) => t.startsWith('42["echo"')).slice(2));
+  check('IO echo event', [echoed[0], echoed[1].event, echoed[1].data], ['echo', 'message', { x: 1 }]);
+
+  io.ws.send('421["message","hi"]');
+  await until(() => io.text.some((t) => t.startsWith('431')));
+  check('IO ack', JSON.parse(io.text.find((t) => t.startsWith('431')).slice(3))[0].ok, true);
+
+  await delay(900);
+  check('IO survives heartbeats', io.ws.readyState, 1);
+
+  io.ws.send('40/admin,{"token":"nope"}');
+  await until(() => io.text.some((t) => t.startsWith('44/admin,')));
+  check('IO admin rejects a bad token', io.text.some((t) => t.startsWith('44/admin,')), true);
+
+  io.ws.send('40/admin,{"token":"secret-token"}');
+  await until(() => io.text.some((t) => t.startsWith('42/admin,["welcome"')));
+  check('IO admin accepts the token', io.text.some((t) => t.startsWith('42/admin,["welcome"')), true);
+
+  io.ws.send('42["close-me"]');
+  await until(() => io.text.includes('41'));
+  check('IO close-me disconnects', io.text.includes('41'), true);
+
+  const polling = await rawGet('/socket.io/?EIO=4&transport=polling');
+  check('IO polling handshake', [polling.status, polling.body[0]], [200, '0']);
 
   server.close();
 

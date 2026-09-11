@@ -3,13 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { sendRequest, sendsBody, type SendOptions } from '../core/http';
 import { createEmptyRequest, type ApiRequest } from '../core/types';
-import { resolveRequest, collectUnresolved } from '../core/variables';
+import {
+  resolveRequest,
+  collectUnresolved,
+  resolve as resolveVariables,
+} from '../core/variables';
 import { parseCurl, toCurl } from '../core/formats';
 import type { VarInfo } from '../core/messages';
 
 import type { HostToWebview, WebviewToHost } from '../core/messages';
 import type { Workspace } from '../core/workspace';
-import type { SendResult } from '../core/types';
+import type { SendResult, WebSocketInfo } from '../core/types';
+import type { Socket } from 'node:net';
+import { WebSocketSession } from '../core/websocket';
 
 const VIEW_TYPE = 'telegraph.requestView';
 
@@ -49,6 +55,9 @@ export class RequestPanel {
 
   private readonly disposables: vscode.Disposable[] = [];
   private inFlight: { aborted: boolean; onAbort?: () => void } | null = null;
+  private socketSession: WebSocketSession | null = null;
+  private socketSendQueue: Promise<void> = Promise.resolve();
+  private disposed = false;
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -431,6 +440,7 @@ export class RequestPanel {
       }
 
       case 'send': {
+        this.closeSocket();
         this.request = message.request;
         this.panel.title = this.request.name || 'New Request';
         // GET and HEAD send no body, so no upload can be in progress.
@@ -474,9 +484,13 @@ export class RequestPanel {
           onAbort?: () => void;
         };
         this.inFlight = signal;
+        const upgraded: WebSocketSession[] = [];
         const result = await sendRequest(resolved, {
           ...resolveOptions(),
           signal,
+          onUpgrade: (socket, head, info) => {
+            upgraded.push(this.createSocketSession(socket, head, info));
+          },
           // Stop at the headers for a binary payload: the view offers a choice
           // and the body is fetched only once that choice is made.
           binaryMode: 'probe',
@@ -515,6 +529,17 @@ export class RequestPanel {
           binaryTextLimit: binaryTextLimitBytes(),
           ...hexViewFlags(),
         });
+
+        const session = upgraded[0];
+        if (session) {
+          if (this.disposed) {
+            session.close(1001, 'Panel closed');
+          } else {
+            this.closeSocket();
+            this.socketSession = session;
+            session.start();
+          }
+        }
 
         await RequestPanel.workspace.recordHistory(
           this.request,
@@ -639,6 +664,27 @@ export class RequestPanel {
         break;
       }
 
+      case 'socketSend': {
+        const session = this.socketSession;
+        if (!session) {
+          break;
+        }
+        const text = message.text;
+        this.socketSendQueue = this.socketSendQueue
+          .then(async () => {
+            const scope = await RequestPanel.workspace.scopeFor(
+              this.request.colId
+            );
+            session.sendText(resolveVariables(text, scope));
+          })
+          .catch(() => undefined);
+        break;
+      }
+
+      case 'socketClose':
+        this.socketSession?.close(1000);
+        break;
+
       case 'abort':
         if (this.inFlight) {
           this.inFlight.aborted = true;
@@ -721,7 +767,41 @@ export class RequestPanel {
 </html>`;
   }
 
+  private createSocketSession(
+    socket: Socket,
+    head: Buffer,
+    info: WebSocketInfo
+  ): WebSocketSession {
+    const session: WebSocketSession = new WebSocketSession(
+      socket,
+      head,
+      info.engineIo,
+      {
+        onEntries: (entries) => {
+          if (this.socketSession === session) {
+            this.post({ type: 'socketEntries', entries });
+          }
+        },
+        onClose: (close) => {
+          if (this.socketSession === session) {
+            this.socketSession = null;
+            this.post({ type: 'socketClosed', close });
+          }
+        },
+      }
+    );
+    return session;
+  }
+
+  private closeSocket(code = 1000, reason = ''): void {
+    const session = this.socketSession;
+    this.socketSession = null;
+    session?.close(code, reason);
+  }
+
   private dispose(): void {
+    this.disposed = true;
+    this.closeSocket(1001, 'Panel closed');
     RequestPanel.panels.delete(this.request._id);
     while (this.disposables.length) {
       this.disposables.pop()?.dispose();

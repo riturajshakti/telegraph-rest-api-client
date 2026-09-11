@@ -9,7 +9,7 @@ you configured.
 cd server
 npm install
 npm start          # http://localhost:4000
-npm test           # 90 automated checks against every endpoint
+npm test           # 120 automated checks against every endpoint and socket
 ```
 
 `GET /` lists every route.
@@ -294,6 +294,94 @@ type Mutation {
 Requesting an unknown field returns a GraphQL `errors` array, which is useful
 for checking how Telegraph renders error responses.
 
+## 9. WebSockets and Socket.IO
+
+### Native WebSocket — `/ws`
+
+In Telegraph, type the URL and press **Send**:
+
+```text
+ws://localhost:4000/ws
+ws://localhost:4000/ws?interval=1000     # the server also pushes a tick every second
+```
+
+The server answers `101 Switching Protocols` and two **Socket** tabs appear:
+one in the request section to compose and send messages, one in the response
+section with the live message log. **Close socket** ends the connection with a
+normal close frame; **Send** connects again.
+
+```sh
+# Handshake check — prints the 101 and the raw welcome frame, then waits
+curl --include --no-buffer \
+  'http://localhost:4000/ws' \
+  --header 'Connection: Upgrade' \
+  --header 'Upgrade: websocket' \
+  --header 'Sec-WebSocket-Version: 13' \
+  --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='
+
+# cURL 8.11 and later speak WebSocket natively
+curl --no-buffer 'ws://localhost:4000/ws'
+
+# Without the upgrade headers: 426 Upgrade Required
+curl --include 'http://localhost:4000/ws'
+```
+
+The first cURL command pastes straight into Telegraph as well. Any text is
+echoed back as `{"type":"echo","data":...}`, and binary frames come back byte
+for byte. These JSON messages do more:
+
+| Message | Effect |
+| --- | --- |
+| `{"action":"burst","count":5}` | five messages back to back |
+| `{"action":"binary","bytes":64}` | a 64-byte binary frame (`00 01 02 …`) |
+| `{"action":"ping"}` | a server ping; the client must answer with a pong |
+| `{"action":"broadcast","data":"hello"}` | sent to every connected client |
+| `{"action":"close","code":4000,"reason":"bye"}` | the server closes the socket |
+
+The welcome message echoes the handshake headers, so you can check exactly
+what the client sent.
+
+### Socket.IO — `/socket.io/`
+
+```sh
+# Engine.IO handshake over plain HTTP long-polling (no upgrade)
+curl 'http://localhost:4000/socket.io/?EIO=4&transport=polling'
+
+# Socket.IO over WebSocket — paste into Telegraph and press Send
+curl --include --no-buffer \
+  'http://localhost:4000/socket.io/?EIO=4&transport=websocket' \
+  --header 'Connection: Upgrade' \
+  --header 'Upgrade: websocket' \
+  --header 'Sec-WebSocket-Version: 13' \
+  --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='
+```
+
+Or as a URL: `ws://localhost:4000/socket.io/?EIO=4&transport=websocket` — add
+`&interval=1000` for a `tick` event every second.
+
+Telegraph spots the `EIO` query parameter. It answers the Engine.IO heartbeat
+(`2` → `3`) and joins the default namespace (`40`) for you, so the
+connection stays open. An **Event** field appears: type an event name and a
+JSON payload, and Telegraph sends `42["name",payload]`. Leave it empty to send
+raw frames.
+
+| Event | Payload | Effect |
+| --- | --- | --- |
+| `message` | `{"hello":"world"}` | echoed back as `echo` |
+| `burst` | `{"count":5}` | five `burst` events |
+| `broadcast` | `"hello everyone"` | sent to every client in the namespace |
+| `close-me` | — | the server disconnects you |
+| anything else | anything | echoed back as `echo` |
+
+Raw frames, with the Event field empty:
+
+```text
+42["message",{"hello":"world"}]      emit "message"
+421["message","hi"]                  emit with ack id 1, answered by 431[...]
+40/admin,{"token":"secret-token"}    join /admin; a wrong token gets 44/admin,{...}
+42/admin,["message","hi"]            emit on /admin
+```
+
 ---
 
 ## Suggested manual test pass
@@ -313,6 +401,11 @@ for checking how Telegraph renders error responses.
 12. **GraphQL** — run a query with variables, then a mutation
 13. **SSE** — `/api/sse?count=3&interval=500` and watch the events arrive
 14. **Endless SSE** — `/api/sse/endless`, confirm it keeps streaming, then Cancel
+15. **WebSocket** — `ws://localhost:4000/ws`, send a message, try each JSON
+    command, then **Close socket**
+16. **Socket.IO** — `ws://localhost:4000/socket.io/?EIO=4&transport=websocket`,
+    emit `message`, leave it open past 25 seconds to see heartbeats answered,
+    then emit `close-me`
 
 ## Notes
 

@@ -4,6 +4,8 @@ import type {
   HistoryEntry,
   KeyValue,
   SendResult,
+  SocketCloseInfo,
+  SocketEntry,
 } from './types';
 
 export type WebviewToHost =
@@ -23,6 +25,8 @@ export type WebviewToHost =
   | { type: 'downloadBody' }
   | { type: 'revealFile'; path: string }
   | { type: 'resendBinary'; mode: 'download' | 'text'; request: ApiRequest }
+  | { type: 'socketSend'; text: string }
+  | { type: 'socketClose' }
   | { type: 'newRequest' };
 
 export interface VarInfo {
@@ -103,6 +107,8 @@ export type HostToWebview =
   | { type: 'fileBytesError'; field: string; message: string }
   | { type: 'saved'; request: ApiRequest }
   | { type: 'activitySaved'; request: ApiRequest }
+  | { type: 'socketEntries'; entries: SocketEntry[] }
+  | { type: 'socketClosed'; close: SocketCloseInfo }
   | { type: 'filePicked'; path: string };
 
 export type SidebarToHost =

@@ -161,6 +161,35 @@ export interface ApiResponse {
   redirects: string[];
   hops?: RedirectHop[];
   contentType: string;
+  webSocket?: WebSocketInfo;
+}
+
+export interface WebSocketInfo {
+  url: string;
+  engineIo?: number;
+  protocol?: string;
+  acceptValid: boolean;
+}
+
+export interface SocketEntry {
+  id: number;
+  at: number;
+  direction: 'in' | 'out';
+  kind: 'text' | 'binary' | 'ping' | 'pong' | 'close';
+  text: string;
+  bytes: number;
+  base64?: string;
+  truncated?: boolean;
+  note?: string;
+  heartbeat?: boolean;
+  automatic?: boolean;
+}
+
+export interface SocketCloseInfo {
+  code: number;
+  reason: string;
+  label: string;
+  by: 'client' | 'server' | 'network' | 'error';
 }
 
 export interface RequestError {

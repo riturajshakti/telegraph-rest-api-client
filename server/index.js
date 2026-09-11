@@ -13,8 +13,11 @@
  * Telegraph URL bar, which will fill in the whole request for you.
  */
 
+const http = require('node:http');
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const { WebSocketServer } = require('ws');
+const { Server: SocketIoServer } = require('socket.io');
 const multer = require('multer');
 const { createHandler } = require('graphql-http/lib/use/express');
 const {
@@ -697,6 +700,330 @@ Mutation:
 */
 app.all('/graphql', createHandler({ schema }));
 
+/*
+Native WebSocket echo server at /ws.
+
+In Telegraph, type either URL and press Send:
+  ws://localhost:4000/ws
+  ws://localhost:4000/ws?interval=1000
+
+Handshake check with cURL — prints the 101 and the raw welcome frame, then waits:
+  curl --include --no-buffer \
+    'http://localhost:4000/ws' \
+    --header 'Connection: Upgrade' \
+    --header 'Upgrade: websocket' \
+    --header 'Sec-WebSocket-Version: 13' \
+    --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='
+
+cURL 8.11 and later speak WebSocket natively:
+  curl --no-buffer 'ws://localhost:4000/ws'
+
+Any text is echoed back. These JSON messages do more:
+  {"action":"burst","count":5}                    five messages back to back
+  {"action":"binary","bytes":64}                  a 64-byte binary frame
+  {"action":"ping"}                               a server ping the client must answer
+  {"action":"broadcast","data":"hello"}           sent to every connected client
+  {"action":"close","code":4000,"reason":"bye"}   the server closes the socket
+
+Without the upgrade headers the route answers 426 Upgrade Required:
+  curl --include 'http://localhost:4000/ws'
+*/
+app.get('/ws', (_req, res) => {
+  res
+    .status(426)
+    .set('Upgrade', 'websocket')
+    .json({
+      ok: false,
+      error: 'This route speaks WebSocket',
+      hint: 'Use ws://localhost:4000/ws, or send Connection: Upgrade and Upgrade: websocket headers.',
+    });
+});
+
+/*
+Socket.IO server at /socket.io/, with an authenticated /admin namespace.
+
+Engine.IO handshake over plain HTTP (long-polling, no upgrade):
+  curl --request GET 'http://localhost:4000/socket.io/?EIO=4&transport=polling'
+
+Socket.IO over WebSocket — paste into Telegraph and press Send:
+  curl --include --no-buffer \
+    'http://localhost:4000/socket.io/?EIO=4&transport=websocket' \
+    --header 'Connection: Upgrade' \
+    --header 'Upgrade: websocket' \
+    --header 'Sec-WebSocket-Version: 13' \
+    --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='
+
+The same thing as a URL:
+  ws://localhost:4000/socket.io/?EIO=4&transport=websocket
+  ws://localhost:4000/socket.io/?EIO=4&transport=websocket&interval=1000
+
+Events — the name goes in the Event field, the payload in the message:
+  message     {"hello":"world"}     echoed back as "echo"
+  burst       {"count":5}           five "burst" events
+  broadcast   "hello everyone"      sent to every client in the namespace
+  close-me                          the server disconnects you
+  (anything)                        echoed back as "echo"
+
+Raw frames, with the Event field left empty:
+  42["message",{"hello":"world"}]      emit "message"
+  421["message","hi"]                  emit with ack id 1, answered by 431[...]
+  40/admin,{"token":"secret-token"}    join /admin; a wrong token gets 44/admin,{...}
+  42/admin,["message","hi"]            emit on /admin
+*/
+const ADMIN_TOKEN = 'secret-token';
+
+let nextSocketId = 1;
+
+function clampInterval(value) {
+  const ms = Number(value) || 0;
+  return ms <= 0 ? 0 : Math.min(Math.max(ms, 50), 60000);
+}
+
+function sendJson(ws, payload) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
+function patternBytes(count) {
+  const bytes = Buffer.alloc(count);
+  for (let i = 0; i < count; i++) {
+    bytes[i] = i % 256;
+  }
+  return bytes;
+}
+
+function onNativeSocket(ws, req, wss) {
+  const url = new URL(req.url, 'http://localhost');
+  const id = nextSocketId++;
+  const interval = clampInterval(url.searchParams.get('interval'));
+  const connectedAt = Date.now();
+
+  sendJson(ws, {
+    type: 'welcome',
+    id,
+    message: 'Connected to the Telegraph WebSocket echo server',
+    protocol: ws.protocol || null,
+    handshake: {
+      query: Object.fromEntries(url.searchParams),
+      headers: req.headers,
+    },
+    commands: [
+      { action: 'burst', count: 5 },
+      { action: 'binary', bytes: 64 },
+      { action: 'ping' },
+      { action: 'broadcast', data: 'hello' },
+      { action: 'close', code: 4000, reason: 'bye' },
+    ],
+    connectedAt: new Date(connectedAt).toISOString(),
+  });
+
+  let seq = 0;
+  const ticker = interval
+    ? setInterval(() => {
+        seq += 1;
+        sendJson(ws, {
+          type: 'tick',
+          seq,
+          elapsedMs: Date.now() - connectedAt,
+          sentAt: new Date().toISOString(),
+        });
+      }, interval)
+    : null;
+
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      ws.send(data, { binary: true });
+      return;
+    }
+
+    const text = data.toString('utf8');
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    const action =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed.action
+        : undefined;
+
+    switch (action) {
+      case 'burst': {
+        const count = Math.min(Math.max(Number(parsed.count) || 5, 1), 500);
+        for (let i = 1; i <= count; i++) {
+          sendJson(ws, { type: 'burst', seq: i, of: count });
+        }
+        return;
+      }
+      case 'binary': {
+        const size = Math.min(Math.max(Number(parsed.bytes) || 64, 1), 1024 * 1024);
+        ws.send(patternBytes(size), { binary: true });
+        return;
+      }
+      case 'ping':
+        ws.ping(Buffer.from('telegraph'));
+        return;
+      case 'broadcast':
+        for (const client of wss.clients) {
+          sendJson(client, {
+            type: 'broadcast',
+            from: id,
+            data: parsed.data ?? null,
+            sentAt: new Date().toISOString(),
+          });
+        }
+        return;
+      case 'close': {
+        const code = Number(parsed.code);
+        const valid = code === 1000 || (code >= 3000 && code <= 4999);
+        ws.close(
+          valid ? code : 4000,
+          String(parsed.reason ?? 'Closed on request').slice(0, 120)
+        );
+        return;
+      }
+      default:
+        sendJson(ws, {
+          type: 'echo',
+          data: parsed ?? text,
+          bytes: data.length,
+          receivedAt: new Date().toISOString(),
+        });
+    }
+  });
+
+  ws.on('pong', (payload) => {
+    sendJson(ws, {
+      type: 'pong',
+      message: 'Your client answered the server ping',
+      payload: payload.toString('utf8'),
+    });
+  });
+
+  ws.on('close', (code, reason) => {
+    if (ticker) {
+      clearInterval(ticker);
+    }
+    console.log(`  WS      /ws #${id} closed ${code} ${reason.toString()}`.trimEnd());
+  });
+}
+
+function onSocketIo(socket) {
+  const interval = clampInterval(socket.handshake.query.interval);
+  const connectedAt = Date.now();
+  const namespace = socket.nsp;
+
+  socket.emit('welcome', {
+    id: socket.id,
+    message: 'Connected to the Telegraph Socket.IO server',
+    namespace: namespace.name,
+    handshake: { query: socket.handshake.query, auth: socket.handshake.auth },
+    events: ['message', 'burst', 'broadcast', 'close-me'],
+    connectedAt: new Date(connectedAt).toISOString(),
+  });
+
+  let seq = 0;
+  const ticker = interval
+    ? setInterval(() => {
+        seq += 1;
+        socket.emit('tick', { seq, elapsedMs: Date.now() - connectedAt });
+      }, interval)
+    : null;
+
+  socket.onAny((event, ...args) => {
+    const ack = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+    const data = args.length <= 1 ? args[0] ?? null : args;
+
+    switch (event) {
+      case 'burst': {
+        const count = Math.min(Math.max(Number(data?.count) || 5, 1), 500);
+        for (let i = 1; i <= count; i++) {
+          socket.emit('burst', { seq: i, of: count });
+        }
+        break;
+      }
+      case 'broadcast':
+        namespace.emit('broadcast', {
+          from: socket.id,
+          data,
+          sentAt: new Date().toISOString(),
+        });
+        break;
+      case 'close-me':
+        socket.disconnect(true);
+        return;
+      default:
+        socket.emit('echo', {
+          event,
+          data,
+          receivedAt: new Date().toISOString(),
+        });
+    }
+
+    if (ack) {
+      ack({ ok: true, event, receivedAt: new Date().toISOString() });
+    }
+  });
+
+  socket.on('disconnect', (reason) => {
+    if (ticker) {
+      clearInterval(ticker);
+    }
+    console.log(`  IO      ${namespace.name} ${socket.id} disconnected (${reason})`);
+  });
+}
+
+function attachSockets(server, options = {}) {
+  const wss = new WebSocketServer({ noServer: true });
+  wss.on('connection', (ws, req) => onNativeSocket(ws, req, wss));
+
+  const io = new SocketIoServer(server, {
+    destroyUpgrade: false,
+    ...(options.pingInterval ? { pingInterval: options.pingInterval } : {}),
+    ...(options.pingTimeout ? { pingTimeout: options.pingTimeout } : {}),
+  });
+  io.on('connection', onSocketIo);
+
+  io.of('/admin')
+    .use((socket, next) => {
+      if (socket.handshake.auth?.token === ADMIN_TOKEN) {
+        next();
+        return;
+      }
+      next(new Error(`unauthorized: join with 40/admin,{"token":"${ADMIN_TOKEN}"}`));
+    })
+    .on('connection', onSocketIo);
+
+  server.on('upgrade', (req, socket, head) => {
+    const { pathname } = new URL(req.url, 'http://localhost');
+
+    if (pathname.startsWith('/socket.io/')) {
+      console.log(`  IO      ${req.url}`);
+      return;
+    }
+
+    if (pathname !== '/ws') {
+      console.log(`  UPGRADE ${req.url} -> 404`);
+      const body = JSON.stringify({ ok: false, error: 'No WebSocket at this path', hint: 'Try /ws or /socket.io/' });
+      socket.end(
+        'HTTP/1.1 404 Not Found\r\n' +
+          'Connection: close\r\n' +
+          'Content-Type: application/json\r\n' +
+          `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` +
+          body
+      );
+      return;
+    }
+
+    console.log(`  WS      ${req.url}`);
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  });
+
+  return { wss, io };
+}
+
 /* ================================================================== *
  * 9. INDEX
  * ================================================================== */
@@ -747,6 +1074,11 @@ app.get('/', (_req, res) => {
         'GET /api/response/large?rows=500',
       ],
       graphql: ['ALL /graphql'],
+      sockets: [
+        'WS  ws://localhost:4000/ws?interval=1000',
+        'IO  ws://localhost:4000/socket.io/?EIO=4&transport=websocket',
+        'IO  namespace /admin (auth token: secret-token)',
+      ],
     },
   });
 });
@@ -775,10 +1107,15 @@ app.use((err, req, res, _next) => {
 
 // Only listen when started directly, so tests can mount the app themselves.
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const server = http.createServer(app);
+  attachSockets(server);
+  server.listen(PORT, () => {
     console.log(`\n  Telegraph test server → http://localhost:${PORT}`);
+    console.log(`  WebSocket → ws://localhost:${PORT}/ws`);
+    console.log(`  Socket.IO → ws://localhost:${PORT}/socket.io/?EIO=4&transport=websocket`);
     console.log(`  GET / lists every endpoint.\n`);
   });
 }
 
 module.exports = app;
+module.exports.attachSockets = attachSockets;

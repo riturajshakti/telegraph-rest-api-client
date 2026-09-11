@@ -6,12 +6,21 @@ import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { stripJsonComments } from './jsonc';
 import { URL } from 'node:url';
+import type { Socket } from 'node:net';
+import {
+  acceptFor,
+  engineIoVersion,
+  headerValue,
+  prepareUpgrade,
+  socketUrl,
+} from './websocket';
 import type {
   RedirectHop,
   ApiRequest,
   ApiResponse,
   KeyValue,
   SendResult,
+  WebSocketInfo,
 } from './types';
 
 /** Files at or under this size have their bytes inlined in the Raw view. */
@@ -100,6 +109,7 @@ export interface SendOptions {
     contentType: string;
   }) => void;
   onStreamChunk?: (text: string, totalBytes: number) => void;
+  onUpgrade?: (socket: Socket, head: Buffer, info: WebSocketInfo) => void;
 }
 
 const STREAMING_TYPES = [
@@ -537,6 +547,7 @@ interface RawResult {
   headBytes?: number;
   /** Set when the body was streamed to this path instead of buffered. */
   savedTo?: string;
+  upgrade?: { socket: Socket; head: Buffer };
 }
 
 function performRequest(
@@ -761,6 +772,22 @@ function performRequest(
 
     req.on('error', reject);
 
+    req.on('upgrade', (res, socket, head) => {
+      socket.on('error', () => undefined);
+      socket.setTimeout(0);
+      resolve({
+        status: res.statusCode ?? 0,
+        statusText: res.statusMessage ?? '',
+        headers: flattenHeaders(res.headers),
+        rawHeaders: res.headers,
+        chunks: [],
+        totalBytes: 0,
+        truncated: false,
+        firstByteAt: Date.now() - startedAt,
+        upgrade: { socket, head },
+      });
+    });
+
     if (options.signal) {
       if (options.signal.aborted) {
         req.destroy(new Error('Request cancelled'));
@@ -819,6 +846,7 @@ export async function sendRequest(
       totalBytes: prepared.buffer?.byteLength ?? 0,
     });
     const headers = buildHeaders(request, prepared);
+    url = prepareUpgrade(url, headers);
 
     const redirects: string[] = [];
     const hops: RedirectHop[] = [];
@@ -874,6 +902,29 @@ export async function sendRequest(
           .filter((h) => h.name.toLowerCase() === 'set-cookie')
           .map((h) => h.value),
       });
+    }
+
+    let webSocket: WebSocketInfo | undefined;
+    if (result.upgrade) {
+      const { socket, head } = result.upgrade;
+      const upgradedTo = String(result.rawHeaders.upgrade ?? '');
+      if (/websocket/i.test(upgradedTo) && options.onUpgrade) {
+        const engineIo = engineIoVersion(url);
+        const protocol = String(
+          result.rawHeaders['sec-websocket-protocol'] ?? ''
+        );
+        webSocket = {
+          url: socketUrl(url),
+          acceptValid:
+            String(result.rawHeaders['sec-websocket-accept'] ?? '') ===
+            acceptFor(headerValue(headers, 'sec-websocket-key') ?? ''),
+          ...(engineIo ? { engineIo } : {}),
+          ...(protocol ? { protocol } : {}),
+        };
+        options.onUpgrade(socket, head, webSocket);
+      } else {
+        socket.destroy();
+      }
     }
 
     const buffer = Buffer.concat(result.chunks);
@@ -932,6 +983,7 @@ export async function sendRequest(
       redirects,
       hops,
       contentType,
+      ...(webSocket ? { webSocket } : {}),
     };
 
     return {

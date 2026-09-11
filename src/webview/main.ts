@@ -21,6 +21,9 @@ import type {
   BodyType,
   HttpMethod,
   SendResult,
+  SocketCloseInfo,
+  SocketEntry,
+  WebSocketInfo,
 } from '../core/types';
 import type { HostToWebview, WebviewToHost } from '../core/messages';
 import {
@@ -46,6 +49,7 @@ const SPLIT_KEY = 'telegraph.splitHeight';
 let pendingFilePick: ((path: string) => void) | null = null;
 const SPLIT_W_KEY = 'telegraph.splitWidth';
 const WIDE_AT = 900;
+const SOCKET_ROW_LIMIT = 2000;
 
 const BODY_TYPES: { value: BodyType; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -120,6 +124,20 @@ class RequestView {
   private responseFind: FindBar | null = null;
   private uploadBar: HTMLDivElement | null = null;
   private uploadLabel: HTMLDivElement | null = null;
+
+  private socketInfo: WebSocketInfo | null = null;
+  private socketState: 'none' | 'connecting' | 'open' | 'closed' = 'none';
+  private socketLastClose: SocketCloseInfo | null = null;
+  private socketLog: HTMLElement | null = null;
+  private socketMessages = 0;
+  private socketTabButton: HTMLButtonElement | null = null;
+  private socketBadge: HTMLElement | null = null;
+  private socketComposer!: CodeEditor;
+  private socketEventInput!: HTMLInputElement;
+  private socketEventRow!: HTMLElement;
+  private socketStatus!: HTMLElement;
+  private socketSendButton!: HTMLButtonElement;
+  private socketCloseButton!: HTMLButtonElement;
 
   mount(root: HTMLElement): void {
     clear(root);
@@ -368,6 +386,7 @@ class RequestView {
       { id: 'auth', label: 'Auth', body: this.buildAuthPanel() },
       { id: 'cookies', label: 'Cookies', body: this.buildRequestCookiesPanel() },
       { id: 'raw', label: 'Raw', body: this.buildRawPanel() },
+      { id: 'socket', label: 'Socket', body: this.buildSocketPanel() },
     ];
 
     for (const def of definitions) {
@@ -382,6 +401,8 @@ class RequestView {
       panels.append(panel);
       this.tabPanels.set(def.id, panel);
     }
+
+    this.tabButtons.get('socket')?.classList.add('hidden');
 
     tabBar.append(this.buildFollowSwitch());
 
@@ -857,6 +878,114 @@ class RequestView {
     ]);
   }
 
+  private buildSocketPanel(): HTMLElement {
+    this.socketStatus = el('span', { class: 'socket-status' }, [
+      'Not connected',
+    ]);
+
+    this.socketCloseButton = el('button', {
+      class: 'btn btn-danger btn-tiny',
+      type: 'button',
+      title: 'Send a close frame and end the connection',
+    }, ['Close socket']) as HTMLButtonElement;
+    this.socketCloseButton.addEventListener('click', () => {
+      this.socketCloseButton.disabled = true;
+      this.socketCloseButton.textContent = 'Closing...';
+      vscode.postMessage({ type: 'socketClose' });
+    });
+
+    this.socketEventInput = el('input', {
+      type: 'text',
+      class: 'field-input socket-event-input',
+      placeholder: 'Event name, e.g. message',
+      spellcheck: 'false',
+    }) as HTMLInputElement;
+    this.socketEventInput.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.sendSocketMessage();
+      }
+    });
+
+    this.socketEventRow = el('div', { class: 'socket-event-row hidden' }, [
+      el('label', { class: 'field-label' }, ['Event']),
+      this.socketEventInput,
+      el('span', { class: 'socket-hint' }, [
+        'Leave empty to send the message as a raw frame',
+      ]),
+    ]);
+
+    this.socketComposer = new CodeEditor('Message to send', () => undefined);
+    this.socketComposer.setLanguage('json');
+    this.socketComposer.textarea.addEventListener(
+      'keydown',
+      (event: KeyboardEvent) => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.stopPropagation();
+          this.sendSocketMessage();
+        }
+      }
+    );
+
+    this.socketSendButton = el('button', {
+      class: 'btn btn-primary btn-tiny',
+      type: 'button',
+    }, ['Send message']) as HTMLButtonElement;
+    this.socketSendButton.addEventListener('click', () =>
+      this.sendSocketMessage()
+    );
+
+    return el('div', { class: 'socket-panel' }, [
+      el('div', { class: 'socket-toolbar' }, [
+        this.socketStatus,
+        this.socketCloseButton,
+      ]),
+      this.socketEventRow,
+      this.socketComposer.element,
+      el('div', { class: 'socket-actions' }, [
+        this.socketSendButton,
+        el('span', { class: 'socket-hint' }, [
+          'Ctrl/Cmd+Enter sends the message',
+        ]),
+      ]),
+    ]);
+  }
+
+  private sendSocketMessage(): void {
+    if (this.socketState !== 'open') {
+      this.flashToast('The socket is not open — press Send to connect');
+      return;
+    }
+    const text = this.socketFrameText();
+    if (text === null) {
+      this.flashToast('Nothing to send — type a message first');
+      return;
+    }
+    vscode.postMessage({ type: 'socketSend', text });
+  }
+
+  private socketFrameText(): string | null {
+    const message = this.socketComposer.getValue();
+    const event = this.socketInfo?.engineIo
+      ? this.socketEventInput.value.trim()
+      : '';
+
+    if (!event) {
+      return message === '' ? null : message;
+    }
+
+    const payload = message.trim();
+    if (!payload) {
+      return `42${JSON.stringify([event])}`;
+    }
+    try {
+      return `42${JSON.stringify([event, JSON.parse(payload) as unknown])}`;
+    } catch {
+      return `42${JSON.stringify([event, message])}`;
+    }
+  }
+
   /** The switches only make sense when there are bytes to reformat. */
   private syncRawHexSwitches(): void {
     if (!this.rawHexSwitches) {
@@ -1275,6 +1404,10 @@ class RequestView {
     if (!this.rawDirty) {
       this.refreshRaw();
     }
+    if (this.socketInfo) {
+      this.socketState = 'connecting';
+      this.syncSocketControls();
+    }
     vscode.postMessage({ type: 'send', request });
   }
 
@@ -1307,6 +1440,7 @@ class RequestView {
     this.bodyFormTable.repaint();
     this.bodyEditor.repaint();
     this.gqlVarsEditor.repaint();
+    this.socketComposer.repaint();
     this.renderAuthFields();
   }
 
@@ -1502,6 +1636,13 @@ class RequestView {
     this.downloadBar = null;
     this.downloadLabel = null;
     this.lastResponse = result.ok ? result.response : null;
+    this.socketInfo = result.ok ? result.response.webSocket ?? null : null;
+    this.socketState = this.socketInfo ? 'open' : 'none';
+    this.socketLastClose = null;
+    this.socketLog = null;
+    this.socketTabButton = null;
+    this.socketBadge = null;
+    this.socketMessages = 0;
     this.sendButton.disabled = false;
     this.sendButton.textContent = 'Send';
 
@@ -1532,6 +1673,7 @@ class RequestView {
           el('div', { class: 'error-message' }, [result.error.message]),
         ])
       );
+      this.settleSocketTabs();
       return;
     }
 
@@ -1539,6 +1681,7 @@ class RequestView {
       this.buildStatusBar(result.response),
       this.buildResponseBody(result.response)
     );
+    this.settleSocketTabs();
   }
 
   private followRedirects = true;
@@ -1718,6 +1861,7 @@ class RequestView {
       response.truncated
         ? el('span', { class: 'status-warn' }, ['truncated'])
         : el('span', {}),
+      this.socketBadgeFor(response),
     ]);
   }
 
@@ -1810,6 +1954,8 @@ class RequestView {
       ? this.buildDownloadingPanel()
       : this.savedFile
       ? this.buildSavedFilePanel()
+      : response.webSocket
+      ? this.buildSocketNotePanel()
       : response.binary && !this.showBinaryAsText
       ? this.buildBinaryChoicePanel(response)
       : bodyPanel;
@@ -1834,6 +1980,11 @@ class RequestView {
     panels.set('raw', this.buildRawResponsePanel(response));
     tabs.push(['raw', 'Raw']);
 
+    if (response.webSocket) {
+      panels.set('socket', this.buildSocketLogPanel(response.webSocket));
+      tabs.push(['socket', 'Socket (0)']);
+    }
+
     const bar = el('div', { class: 'tab-bar' });
     const buttons = new Map<string, HTMLButtonElement>();
 
@@ -1853,7 +2004,12 @@ class RequestView {
       bar.append(button);
     }
 
-    buttons.get('body')?.classList.add('active');
+    const initial = response.webSocket ? 'socket' : 'body';
+    for (const [key, panel] of panels) {
+      panel.classList.toggle('active', key === initial);
+    }
+    buttons.get(initial)?.classList.add('active');
+    this.socketTabButton = buttons.get('socket') ?? null;
 
     return el('div', { class: 'response-content' }, [
       bar,
@@ -2170,6 +2326,269 @@ class RequestView {
     return el('div', { class: 'tab-panel' }, [toolbar, pre]);
   }
 
+  private buildSocketNotePanel(): HTMLElement {
+    return el('div', { class: 'tab-panel' }, [
+      el('div', { class: 'response-placeholder' }, [
+        '101 Switching Protocols carries no body. The connection is now a WebSocket, and its messages are in the Socket tab.',
+      ]),
+    ]);
+  }
+
+  private socketBadgeFor(response: ApiResponse): HTMLElement {
+    if (!response.webSocket) {
+      return el('span', {});
+    }
+    this.socketBadge = el('span', { class: 'socket-badge open' }, [
+      'WebSocket open',
+    ]);
+    return this.socketBadge;
+  }
+
+  private buildSocketLogPanel(info: WebSocketInfo): HTMLElement {
+    const log = el('div', { class: 'socket-log' });
+    this.socketLog = log;
+
+    const clearButton = el('button', {
+      class: 'btn btn-ghost btn-tiny',
+      type: 'button',
+    }, ['Clear']) as HTMLButtonElement;
+    clearButton.addEventListener('click', () => {
+      clear(log);
+      this.socketMessages = 0;
+      this.syncSocketTab();
+    });
+
+    const copyButton = el('button', {
+      class: 'icon-btn',
+      type: 'button',
+      title: 'Copy the message log',
+      'aria-label': 'Copy the message log',
+    }, ['⧉']) as HTMLButtonElement;
+    copyButton.addEventListener('click', () => {
+      const lines = Array.from(
+        log.querySelectorAll<HTMLElement>('.socket-row')
+      ).map((row) => row.dataset.copy ?? '');
+      void navigator.clipboard.writeText(lines.join('\n'));
+      flash(copyButton);
+      this.flashToast('Socket log copied');
+    });
+
+    this.appendSocketNotice(`Connected to ${info.url}`);
+    if (info.protocol) {
+      this.appendSocketNotice(`Subprotocol: ${info.protocol}`);
+    }
+    if (info.engineIo) {
+      this.appendSocketNotice(
+        info.engineIo >= 4
+          ? `Socket.IO detected (Engine.IO v${info.engineIo}): heartbeats and the default namespace join are handled automatically`
+          : `Socket.IO detected (Engine.IO v${info.engineIo}): heartbeats are sent automatically`
+      );
+    }
+    if (!info.acceptValid) {
+      this.appendSocketNotice(
+        'Sec-WebSocket-Accept does not match the key that was sent',
+        true
+      );
+    }
+
+    return el('div', { class: 'tab-panel' }, [
+      el('div', { class: 'response-toolbar' }, [
+        el('span', { class: 'response-lang' }, [
+          info.engineIo ? 'Socket.IO' : 'WebSocket',
+        ]),
+        clearButton,
+        copyButton,
+      ]),
+      log,
+    ]);
+  }
+
+  onSocketEntries(entries: SocketEntry[]): void {
+    const log = this.socketLog;
+    if (!log) {
+      return;
+    }
+
+    const pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    const rows = document.createDocumentFragment();
+    for (const entry of entries) {
+      rows.append(this.socketRow(entry));
+      if (
+        (entry.kind === 'text' || entry.kind === 'binary') &&
+        !entry.heartbeat
+      ) {
+        this.socketMessages += 1;
+      }
+    }
+    log.append(rows);
+
+    while (log.childElementCount > SOCKET_ROW_LIMIT) {
+      log.firstElementChild?.remove();
+    }
+    if (pinned) {
+      log.scrollTop = log.scrollHeight;
+    }
+    this.syncSocketTab();
+  }
+
+  private socketRow(entry: SocketEntry): HTMLElement {
+    const time = clockTime(entry.at);
+    const arrow = entry.direction === 'out' ? '↑' : '↓';
+
+    let body: string;
+    if (entry.kind === 'binary') {
+      const base64 = entry.base64 ?? '';
+      const shown = atob(base64).length;
+      const note = entry.truncated
+        ? `\n<showing the first ${shown.toLocaleString('en-US')} of ` +
+          `${entry.bytes.toLocaleString('en-US')} bytes>`
+        : '';
+      body = renderHead(base64, note, {
+        hex: this.hexView,
+        offsets: this.hexOffsets,
+      });
+    } else {
+      body = entry.truncated
+        ? `${entry.text}\n<showing the first ` +
+          `${entry.text.length.toLocaleString('en-US')} characters of ` +
+          `${entry.bytes.toLocaleString('en-US')} bytes>`
+        : entry.text;
+    }
+    if (!body) {
+      body =
+        entry.kind === 'ping' || entry.kind === 'pong'
+          ? '(no payload)'
+          : '(empty)';
+    }
+
+    const meta = [
+      entry.kind,
+      formatBytes(entry.bytes),
+      ...(entry.note ? [entry.note] : []),
+    ].join(' · ');
+    const quiet = entry.heartbeat || entry.automatic;
+    const copied =
+      entry.kind === 'binary' ? `<${entry.bytes} bytes of binary>` : entry.text;
+
+    return el('div', {
+      class:
+        `socket-row socket-${entry.direction}` +
+        (quiet ? ' socket-quiet' : '') +
+        (entry.kind === 'close' ? ' socket-close' : ''),
+      'data-copy': `${time} ${arrow} ${copied}`,
+    }, [
+      el('span', {
+        class: 'socket-arrow',
+        title: entry.direction === 'out' ? 'Sent' : 'Received',
+      }, [arrow]),
+      el('div', { class: 'socket-main' }, [
+        el('div', { class: 'socket-meta' }, [
+          el('span', { class: 'socket-time' }, [time]),
+          meta,
+        ]),
+        el('div', { class: 'socket-text' }, [body]),
+      ]),
+    ]);
+  }
+
+  private appendSocketNotice(text: string, error = false): void {
+    const log = this.socketLog;
+    if (!log) {
+      return;
+    }
+    const time = clockTime(Date.now());
+    log.append(
+      el('div', {
+        class: `socket-row socket-notice${error ? ' error' : ''}`,
+        'data-copy': `${time} • ${text}`,
+      }, [
+        el('span', { class: 'socket-arrow' }, ['•']),
+        el('div', { class: 'socket-main' }, [
+          el('span', { class: 'socket-time' }, [time]),
+          text,
+        ]),
+      ])
+    );
+    log.scrollTop = log.scrollHeight;
+  }
+
+  onSocketClosed(close: SocketCloseInfo): void {
+    if (!this.socketInfo) {
+      return;
+    }
+    this.socketState = 'closed';
+    this.socketLastClose = close;
+
+    const who =
+      close.by === 'client'
+        ? 'Closed by you'
+        : close.by === 'server'
+        ? 'Closed by the server'
+        : close.by === 'network'
+        ? 'Connection lost'
+        : 'Closed after a protocol error';
+    this.appendSocketNotice(
+      `${who} · ${close.code} ${close.label}` +
+        (close.reason ? ` — ${close.reason}` : ''),
+      close.by === 'network' || close.by === 'error'
+    );
+    this.syncSocketControls();
+  }
+
+  private syncSocketControls(): void {
+    const info = this.socketInfo;
+    const state = this.socketState;
+    const live = state === 'open';
+
+    const requestTab = this.tabButtons.get('socket');
+    requestTab?.classList.toggle('hidden', !info);
+    requestTab?.classList.toggle('socket-live', live);
+    this.socketTabButton?.classList.toggle('socket-live', live);
+
+    if (this.socketBadge) {
+      this.socketBadge.textContent = live ? 'WebSocket open' : 'WebSocket closed';
+      this.socketBadge.classList.toggle('open', live);
+    }
+
+    if (!info) {
+      return;
+    }
+
+    const close = this.socketLastClose;
+    const status = live
+      ? `Connected to ${info.url}`
+      : state === 'connecting'
+      ? 'Connecting...'
+      : close
+      ? `Closed · ${close.code} ${close.label}. Press Send to reconnect.`
+      : 'Closed. Press Send to reconnect.';
+    this.socketStatus.textContent = status;
+    this.socketStatus.title = status;
+    this.socketStatus.classList.toggle('open', live);
+    this.socketStatus.classList.toggle('connecting', state === 'connecting');
+    this.socketCloseButton.classList.toggle('hidden', !live);
+    this.socketCloseButton.disabled = false;
+    this.socketCloseButton.textContent = 'Close socket';
+    this.socketSendButton.disabled = !live;
+    this.socketEventRow.classList.toggle('hidden', !info.engineIo);
+  }
+
+  private syncSocketTab(): void {
+    if (this.socketTabButton) {
+      this.socketTabButton.textContent = `Socket (${this.socketMessages})`;
+    }
+  }
+
+  private settleSocketTabs(): void {
+    this.syncSocketControls();
+    this.syncSocketTab();
+    if (this.socketInfo) {
+      this.selectTab('socket');
+    } else if (this.tabButtons.get('socket')?.classList.contains('active')) {
+      this.selectTab('params');
+    }
+  }
+
   private buildHeadersPanelFor(response: ApiResponse): HTMLElement {
     const raw = response.headers
       .map((h) => `${h.name}: ${h.value}`)
@@ -2391,6 +2810,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function clockTime(at: number): string {
+  const date = new Date(at);
+  const two = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${two(date.getHours())}:${two(date.getMinutes())}:` +
+    `${two(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, '0')}`
+  );
+}
+
 KeyValueTable.onPickFile = (apply) => {
   pendingFilePick = apply;
   vscode.postMessage({ type: 'pickFile' });
@@ -2482,6 +2910,12 @@ if (root) {
         break;
       case 'fileBytesError':
         view.onFileBytesError(message.field, message.message);
+        break;
+      case 'socketEntries':
+        view.onSocketEntries(message.entries);
+        break;
+      case 'socketClosed':
+        view.onSocketClosed(message.close);
         break;
       case 'result':
         view.setResult(

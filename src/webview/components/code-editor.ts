@@ -255,6 +255,23 @@ export class CodeEditor {
     setTimeout(() => hint.remove(), 2000);
   }
 
+  /**
+   * Replaces a range through execCommand so the browser keeps its own undo
+   * history. Assigning to `value` directly wipes that stack, which is why
+   * every editing command routes through here.
+   */
+  private replaceRange(start: number, end: number, text: string): void {
+    const area = this.textarea;
+    area.focus();
+    area.setSelectionRange(start, end);
+
+    if (text) {
+      document.execCommand('insertText', false, text);
+    } else if (start !== end) {
+      document.execCommand('delete');
+    }
+  }
+
   private lineRange(): { start: number; end: number } {
     const { selectionStart, selectionEnd, value } = this.textarea;
     const start = value.lastIndexOf('\n', selectionStart - 1) + 1;
@@ -302,8 +319,7 @@ export class CodeEditor {
       })
       .join('\n');
 
-    area.value =
-      area.value.slice(0, start) + updated + area.value.slice(end);
+    this.replaceRange(start, end, updated);
     area.setSelectionRange(start, start + updated.length);
     this.repaint();
     this.onInput();
@@ -315,16 +331,12 @@ export class CodeEditor {
 
     if (selectionStart !== selectionEnd) {
       const text = area.value.slice(selectionStart, selectionEnd);
-      area.value =
-        area.value.slice(0, selectionEnd) +
-        text +
-        area.value.slice(selectionEnd);
+      this.replaceRange(selectionEnd, selectionEnd, text);
       area.setSelectionRange(selectionEnd, selectionEnd + text.length);
     } else {
       const { start, end } = this.lineRange();
       const line = area.value.slice(start, end);
-      area.value =
-        area.value.slice(0, end) + '\n' + line + area.value.slice(end);
+      this.replaceRange(end, end, `\n${line}`);
       const caret = selectionStart + line.length + 1;
       area.setSelectionRange(caret, caret);
     }
@@ -337,7 +349,7 @@ export class CodeEditor {
     const area = this.textarea;
     const { start, end } = this.lineRange();
     const cut = end < area.value.length ? end + 1 : end;
-    area.value = area.value.slice(0, start) + area.value.slice(cut);
+    this.replaceRange(start, cut, '');
     area.setSelectionRange(start, start);
     this.repaint();
     this.onInput();
@@ -355,12 +367,7 @@ export class CodeEditor {
       }
       const prevStart = value.lastIndexOf('\n', start - 2) + 1;
       const prev = value.slice(prevStart, start - 1);
-      area.value =
-        value.slice(0, prevStart) +
-        block +
-        '\n' +
-        prev +
-        value.slice(end);
+      this.replaceRange(prevStart, end, `${block}\n${prev}`);
       area.setSelectionRange(prevStart, prevStart + block.length);
     } else {
       if (end >= value.length) {
@@ -371,12 +378,7 @@ export class CodeEditor {
         nextEnd = value.length;
       }
       const next = value.slice(end + 1, nextEnd);
-      area.value =
-        value.slice(0, start) +
-        next +
-        '\n' +
-        block +
-        value.slice(nextEnd);
+      this.replaceRange(start, nextEnd, `${next}\n${block}`);
       const newStart = start + next.length + 1;
       area.setSelectionRange(newStart, newStart + block.length);
     }
@@ -394,8 +396,7 @@ export class CodeEditor {
         ? block.replace(/^/gm, INDENT)
         : block.replace(/^ {1,2}/gm, '');
 
-    area.value =
-      area.value.slice(0, start) + updated + area.value.slice(end);
+    this.replaceRange(start, end, updated);
     area.setSelectionRange(start, start + updated.length);
     this.repaint();
     this.onInput();
@@ -915,7 +916,7 @@ export class CodeEditor {
     // With a selection, every variant just removes it.
     if (selectionStart !== selectionEnd) {
       event.preventDefault();
-      area.value = value.slice(0, selectionStart) + value.slice(selectionEnd);
+      this.replaceRange(selectionStart, selectionEnd, '');
       area.setSelectionRange(selectionStart, selectionStart);
       this.repaint();
       this.onInput();
@@ -943,7 +944,7 @@ export class CodeEditor {
     }
 
     event.preventDefault();
-    area.value = value.slice(0, from) + value.slice(to);
+    this.replaceRange(from, to, '');
     area.setSelectionRange(from, from);
     this.repaint();
     this.onInput();
@@ -1021,6 +1022,11 @@ export class CodeEditor {
         this.toggleComment();
         return;
       }
+      if (event.shiftKey && key === 'd') {
+        event.preventDefault();
+        this.duplicateLine();
+        return;
+      }
       if (key === 'd') {
         event.preventDefault();
         this.selectWordOccurrence();
@@ -1039,11 +1045,6 @@ export class CodeEditor {
       if (event.shiftKey && key === 'k') {
         event.preventDefault();
         this.deleteLine();
-        return;
-      }
-      if (event.shiftKey && key === 'd') {
-        event.preventDefault();
-        this.duplicateLine();
         return;
       }
     }
